@@ -102,8 +102,13 @@ rather than guessing.
   (test post was text-only). A second recording WITH a real photo attached is
   required before implementing photo posts; Playwright `set_input_files` on
   `input[type=file]` is the likely automation path.
-- Login in that profile hit `two_step_verification` + reCAPTCHA — do NOT
-  automate credential entry; rely on the persistent-profile session.
+- Login lands on the MAIN account **Mr Alexei Villa** (`c_user=61592579496197`);
+  posting must happen as the professional profile **Carmazon** — active
+  profile is the `i_user` cookie (`61592323007979`). Auto-switch implemented
+  and verified in `scripts/probe_group.py`: click the top-right account button
+  `[role=button][aria-label="Tu perfil"]`, then PLAYWRIGHT-trusted-click the
+  "Carmazon" menu row (JS `.click()` is untrusted; FB's React handler ignores
+  it). Selector facts came from `scripts/dump_header.py`.
 - That recording ran WITHOUT `--profile`, so its login was throwaway. Fixed:
   probe/automation use the persistent profile (below).
 
