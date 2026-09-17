@@ -34,18 +34,21 @@ NON_APP_URLS = re.compile(
 
 OPEN_ACCOUNT_MENU_JS = r"""
 (() => {
-  const cands = Array.from(document.querySelectorAll('[role="button"]')).filter(el => {
-    const r = el.getBoundingClientRect();
-    if (r.width <= 0 || r.top > 90 || !el.querySelector('img')) return false;
-    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-    const rightish = r.left > innerWidth * 0.4;
-    const named = /cuenta|account|perfil|profile|configuraci/.test(aria);
-    return rightish && (named || r.top < 70);
-  });
-  if (!cands.length) return 'no-account-button';
-  cands.sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left);
-  cands[0].click();
-  return 'clicked-account:' + (cands[0].getAttribute('aria-label') || '');
+  // FB's avatar button has NO <img> child (CSS background-image) — trust aria-label.
+  let btn = document.querySelector('[role="button"][aria-label="Tu perfil"]')
+    || document.querySelector('[role="button"][aria-label="Your profile"]');
+  if (!btn) {
+    const cands = Array.from(document.querySelectorAll('[role="button"]')).filter(el => {
+      const r = el.getBoundingClientRect();
+      const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+      return r.width > 0 && r.top < 90 && r.left > innerWidth * 0.4
+        && /perfil|profile|cuenta|account/.test(aria);
+    });
+    btn = cands[cands.length - 1] || null;
+  }
+  if (!btn) return 'no-account-button';
+  btn.click();
+  return 'clicked-account:' + (btn.getAttribute('aria-label') || '');
 })()
 """
 
