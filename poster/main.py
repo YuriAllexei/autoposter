@@ -25,7 +25,9 @@ from playwright.async_api import async_playwright
 from .config import Config, load_config
 from .fb import dump_evidence, ensure_active_profile, ensure_login
 from .flows import FlowError, Post, get_flow, human_sleep
+from .notify import build_payload, send_summary
 from .photos import collect_photos
+from .results import RunRecorder
 
 
 class Tee:
@@ -84,7 +86,9 @@ async def verify_pending(page, group_url: str, cfg: Config, log) -> None:
         log(f"verify: could not open {pending}: {type(e).__name__}")
 
 
-async def run_group(page, group: dict, post: Post, cfg: Config, log) -> bool:
+async def run_group(
+    page, group: dict, post: Post, cfg: Config, log
+) -> tuple[bool, str | None]:
     code = group["posting_code"]
     flow = get_flow(code)  # unknown code = KeyError, hard stop (never guess)
     await human_sleep(cfg, log, f"open group {group['name']!r}")
@@ -97,7 +101,7 @@ async def run_group(page, group: dict, post: Post, cfg: Config, log) -> bool:
         shot = await dump_evidence(page, cfg.screenshot_dir, "feed_not_hydrated",
                                    html=await page.content())
         log(f"[group] FAIL composer never hydrated. Evidence: {shot}")
-        return False
+        return False, "composer never hydrated (see *_feed_not_hydrated.png)"
     await page.evaluate("window.scrollTo(0, 0)")
     await page.wait_for_timeout(2000)
     try:
@@ -108,21 +112,54 @@ async def run_group(page, group: dict, post: Post, cfg: Config, log) -> bool:
             await page.keyboard.press("Escape")  # close composer, leave nothing staged
         except Exception:
             pass
-        return False
+        return False, f"flow_error: {e}"
     if not cfg.dry_run:
         await verify_pending(page, group["group_url"], cfg, log)
-    return True
+    return True, None
+
+
+def make_finish(cfg: Config, recorder: RunRecorder):
+    """THE one Discord message of the run — call exactly once, at the end.
+
+    Returns a closure finish(aborted=None): never raises, never sends twice
+    (monitoring must not change the poster run's exit code).
+    """
+    sent = False
+
+    def finish(aborted: str | None = None, log=print) -> None:
+        nonlocal sent
+        if sent or not cfg.discord_webhook_url:
+            if not sent:
+                log("monitor: AP_DISCORD_WEBHOOK_URL not set — no Discord summary")
+            return
+        sent = True
+        try:
+            summary = recorder.summary(aborted=aborted)
+            send_summary(
+                cfg.discord_webhook_url,
+                build_payload(summary, cfg.fb_posting_profile_name), log)
+        except Exception as e:  # monitoring is best-effort by design
+            log(f"monitor: {type(e).__name__}: {e}")
+
+    return finish
 
 
 async def main_async(cfg: Config, only_group: str | None) -> int:
+    recorder = RunRecorder(
+        ledger_path=cfg.ledger_file,
+        run_id=datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
+        dry_run=cfg.dry_run)
+    finish = make_finish(cfg, recorder)
     groups = load_groups(cfg.groups_file)
     if only_group:
         groups = [g for g in groups if only_group in g["group_url"] or only_group == g["name"]]
     if not groups:
         print("[run] no enabled groups matched — nothing to do")
+        finish("run aborted: no enabled groups matched")
         return 1
     if not cfg.post_text_file.exists():
         print(f"[run] missing {cfg.post_text_file} — nothing to post")
+        finish("run aborted: missing data/post.txt")
         return 1
     post = build_post(cfg)
 
@@ -139,28 +176,41 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
         )
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         rc = 1
-        try:
-            def log(msg: str) -> None:
-                print(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {msg}", flush=True)
 
+        def log(msg: str) -> None:
+            print(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {msg}", flush=True)
+
+        try:
             if not await ensure_login(ctx, page, log):
+                finish("run aborted: not logged in (c_user never appeared)", log)
                 return 2
             if not await ensure_active_profile(
                 ctx, page, posting_user_id=cfg.fb_posting_user,
                 posting_name=cfg.fb_posting_profile_name, log=log,
             ):
                 log("abort: not posting as the professional profile")
+                finish(f"run aborted: not posting as "
+                       f"{cfg.fb_posting_profile_name} (profile switch failed)", log)
                 return 3
 
             ok = 0
             for group in groups[: cfg.max_posts_per_run]:
-                if await run_group(page, group, post, cfg, log):
+                group_ok, err = await run_group(page, group, post, cfg, log)
+                recorder.record(group, group_ok, err)
+                if group_ok:
                     ok += 1
                 await human_sleep(cfg, log, "next group")
             log(f"done: {ok} group(s) processed of "
                 f"{min(len(groups), cfg.max_posts_per_run)} queued "
                 f"({'dry-run staged' if cfg.dry_run else 'published'})")
             rc = 0 if ok else 1
+            finish(None, log)
+        except Exception as e:
+            # e.g. unknown posting_code: keep the hard-error traceback, but
+            # let Discord know the run died before re-raising.
+            log(f"[run] FATAL: {type(e).__name__}: {e}")
+            finish(f"run crashed: {type(e).__name__}: {e}", log)
+            raise
         finally:
             await ctx.close()  # flush profile cookies
     return rc

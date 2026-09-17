@@ -30,4 +30,4 @@ line-length = 100
 [tool.ruff.lint.per-file-ignores]
 "poster/fb.py" = ["BLE001", "S110"]  # browser nav/teardown: broad catches are intentional
 "poster/flows.py" = ["BLE001", "S110"]  # composer cleanup is best-effort by design
-"poster/main.py" = ["BLE001", "S110", "SIM115"]  # run log stays open for whole process; per-group isolation
+"poster/main.py" = ["BLE001", "S110", "SIM115", "SIM105"]  # run log stays open for whole process; per-group isolation; composer Escape cleanup is best-effort
