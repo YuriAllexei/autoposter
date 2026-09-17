@@ -20,7 +20,9 @@ ruff = ">=0.5"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+# scraping_recorder on the path so `pytest tests scraping_recorder/tests`
+# works from the repo root (its tests import sibling modules by bare name)
+pythonpath = [".", "scraping_recorder"]
 
 [tool.ruff]
 line-length = 100
