@@ -24,6 +24,13 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright, BrowserContext
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from poster.fb import (  # noqa: E402  single source of truth for switcher JS
+    CLICK_PROFILE_ITEM_JS,
+    OPEN_ACCOUNT_MENU_JS,
+    menu_open_js,
+)
+
 DEFAULT_GROUP = "https://www.facebook.com/groups/249803862915566"
 # posting must happen as the professional profile, not the main account
 CARMAZON_ID = "61592323007979"
@@ -31,60 +38,6 @@ CARMAZON_NAME = "Carmazon"
 NON_APP_URLS = re.compile(
     r"/(login|checkpoint|two_step_verification|recover|security)/|recaptcha|/tr/"
 )
-
-OPEN_ACCOUNT_MENU_JS = r"""
-(() => {
-  // FB's avatar button has NO <img> child (CSS background-image) — trust aria-label.
-  let btn = document.querySelector('[role="button"][aria-label="Tu perfil"]')
-    || document.querySelector('[role="button"][aria-label="Your profile"]');
-  if (!btn) {
-    const cands = Array.from(document.querySelectorAll('[role="button"]')).filter(el => {
-      const r = el.getBoundingClientRect();
-      const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-      return r.width > 0 && r.top < 90 && r.left > innerWidth * 0.4
-        && /perfil|profile|cuenta|account/.test(aria);
-    });
-    btn = cands[cands.length - 1] || null;
-  }
-  if (!btn) return 'no-account-button';
-  btn.click();
-  return 'clicked-account:' + (btn.getAttribute('aria-label') || '');
-})()
-"""
-
-CLICK_PROFILE_ITEM_JS = r"""
-((want) => {
-  document.querySelectorAll('[data-ap-switch]').forEach(e => e.removeAttribute('data-ap-switch'));
-  const els = Array.from(
-    document.querySelectorAll('[role="menuitem"], [role="button"], span, div')
-  ).filter(el => {
-    const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && t && t.length < 200 && t.includes(want);
-  });
-  if (!els.length) return 'no-profile-item';
-  // smallest containing clickable row = the LAST match (most specific/innermost is too
-  // small); FB wants the row-level node with a React handler:
-  const inner = els[els.length - 1];
-  const row = inner.closest('[role="menuitem"],[role="button"],[role="listitem"]') || inner;
-  row.setAttribute('data-ap-switch', '1');
-  const r = row.getBoundingClientRect();
-  return 'stamped:' + row.tagName.toLowerCase() + ':' + row.getAttribute('role')
-    + ':' + Math.round(r.x + r.width / 2) + ',' + Math.round(r.y + r.height / 2);
-})("%NAME%")
-"""
-
-
-MENU_OPEN_JS = r"""
-(() => {
-  for (const el of document.querySelectorAll('[role="menuitem"],[role="button"],span,div')) {
-    const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
-    const r = el.getBoundingClientRect();
-    if (r.width > 0 && t && t.length < 200 && t.includes('%NAME%')) return true;
-  }
-  return false;
-})()
-"""
 
 DETECT_JS = r"""
 (() => {
@@ -259,7 +212,7 @@ async def main() -> int:
                 attempts += 1
                 try:
                     menu_open = await page.evaluate(
-                        MENU_OPEN_JS.replace("%NAME%", CARMAZON_NAME))
+                        menu_open_js(CARMAZON_NAME))
                     if not menu_open:
                         print(f"[probe] switch try {attempts}: "
                               f"{await try_switch()}", flush=True)

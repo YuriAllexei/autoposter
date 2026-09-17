@@ -12,7 +12,7 @@
       "posting_code": "group_composer_es_v1",
       "photos_order": "sorted",
       "enabled": true,
-      "$note": "Flow proven by recording 20260917T014025Z + scripts/dryrun_post.py up to (but never incl.) Publicar."
+      "$note": "Flow proven by recording 20260917T063422Z (login->Carmazon->composer->text->photo car.jpg->Publicar->verify) + scripts/dryrun_post.py."
     }
   ]
 }

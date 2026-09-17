@@ -27,7 +27,17 @@ poetry run python scraping_recorder/session_timeline.py <dump_dir> --full
 poetry run python scripts/probe_group.py [--group-url URL]  # read-only composer probe
 poetry run python scripts/dryrun_post.py   # full flow up to (never incl.) Publicar
 poetry run python scripts/dump_header.py   # header buttons for selector work
-poetry run pytest scraping_recorder/tests -q
+
+# THE BOT (poster package). DRY RUN = stages composer (text verified 1:1 +
+# photos attached) then closes it WITHOUT clicking Publicar + saves evidence
+# screenshots/html/json under .local-capture/shots/:
+poetry run python -m poster.main                # respects AP_DRY_RUN in .env
+poetry run python -m poster.main --dry-run      # force dry run
+poetry run python -m poster.main --group 249803862915566
+# --live only works when .env already has AP_DRY_RUN=false (fail-safe by design)
+poetry run python -m poster.main --live
+
+poetry run pytest tests scraping_recorder/tests -q
 ```
 
 Convenience (from `setup.sh`, registered in the shell rc):

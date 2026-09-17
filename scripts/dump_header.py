@@ -3,7 +3,7 @@ import asyncio, json
 from pathlib import Path
 from playwright.async_api import async_playwright
 
-PROFILE = str(Path("/home/david/autoposer/.local-capture/profiles/facebook"))
+PROFILE = str(Path(__file__).resolve().parent.parent / ".local-capture/profiles/facebook")
 
 DUMP_JS = r"""
 (() => {

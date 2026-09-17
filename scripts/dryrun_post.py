@@ -22,8 +22,9 @@ GROUP_URL = "https://www.facebook.com/groups/249803862915566"
 CARMAZON_ID = "61592323007979"
 CARMAZON_NAME = "Carmazon"
 POST_TEXT = "Hola grupo, ando buscando una Tacoma 2021 para arriba :)"
-PROFILE = str(Path("/home/david/autoposer/.local-capture/profiles/facebook"))
-OUTDIR = Path("/home/david/autoposer/.local-capture/dryrun")
+_REPO = Path(__file__).resolve().parent.parent
+PROFILE = str(_REPO / ".local-capture/profiles/facebook")
+OUTDIR = _REPO / ".local-capture/dryrun"
 
 from probe_group import CLICK_PROFILE_ITEM_JS, OPEN_ACCOUNT_MENU_JS  # noqa: E402
 
