@@ -1,0 +1,26 @@
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "autoposter"
+version = "0.1.0"
+description = "Facebook group auto-posting bot for car-sale inventory (Playwright web automation)"
+authors = ["Alexei <alexei@localhost>"]
+readme = "AGENTS.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+playwright = ">=1.48,<2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8"
+ruff = ">=0.5"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
