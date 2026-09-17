@@ -14,6 +14,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
+# User rule (2026-09-17): random delays live between 3-7s; NOTHING may wait
+# longer than this cap, even if .env asks for more.
+MAX_ALLOWED_DELAY = 7.0
+
 
 def _as_bool(v: str | None, default: bool) -> bool:
     if v is None or v.strip() == "":
@@ -134,4 +138,9 @@ def load_config(env_file: Path | None = None) -> Config:
             f"invalid delay config: AP_DELAY_MIN_SECONDS={cfg.delay_min} "
             f"AP_DELAY_MAX_SECONDS={cfg.delay_max} (need 0 <= min <= max)"
         )
+    # HARD cap (user rule): no wait in this project exceeds MAX_ALLOWED_DELAY,
+    # regardless of what .env says. Always leaves a random spread.
+    cfg.delay_max = min(cfg.delay_max, MAX_ALLOWED_DELAY)
+    if cfg.delay_min >= cfg.delay_max:
+        cfg.delay_min = max(0.0, cfg.delay_max - 4.0)
     return cfg

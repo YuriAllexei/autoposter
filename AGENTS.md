@@ -59,7 +59,8 @@ harmless; use `poetry run python -m pytest`, not PATH pytest).
 4. `posting_code` in groups.json = NAME OF THAT GROUP'S FLOW FUNCTION
    (`poster/flows.py::<code>(page, post)`). Unknown code = hard error, never guess.
 5. Random `uniform(AP_DELAY_MIN, AP_DELAY_MAX)` sleep before every post /
-   group / URL / page action; per-char typing jitter.
+   group / URL / page action; per-char typing jitter. USER RULE: waits must be
+   short — 3-7s, and the loader hard-caps any config at 7s (never longer).
 6. DEV SAFETY: never post or comment unless the selector is proven against a
    recording/dry-run. `AP_DRY_RUN=true` is default and fail-safe.
 

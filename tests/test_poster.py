@@ -25,7 +25,7 @@ def test_config_env_file_and_real_env_override(tmp_path, monkeypatch):
     monkeypatch.delenv("AP_DRY_RUN", raising=False)
     cfg = load_config(env_file=env)
     assert cfg.dry_run is False
-    assert (cfg.delay_min, cfg.delay_max) == (5.0, 9.0)
+    assert (cfg.delay_min, cfg.delay_max) == (5.0, 7.0)  # 9 clamped to hard cap
     monkeypatch.setenv("AP_DRY_RUN", "true")  # real env wins over file
     assert load_config(env_file=env).dry_run is True
 
@@ -35,6 +35,44 @@ def test_delay_bounds_validated(tmp_path):
     env.write_text("AP_DELAY_MIN_SECONDS=100\nAP_DELAY_MAX_SECONDS=50\n")
     with pytest.raises(ValueError, match="delay"):
         load_config(env_file=env)
+
+
+def test_delay_hard_capped_at_7s(tmp_path):
+    # user rule: no wait may exceed 7s no matter what .env says; spread kept
+    env = tmp_path / ".env"
+    env.write_text("AP_DELAY_MIN_SECONDS=45\nAP_DELAY_MAX_SECONDS=180\n")
+    cfg = load_config(env_file=env)
+    assert cfg.delay_max == 7.0
+    assert 0 <= cfg.delay_min < cfg.delay_max
+
+
+def test_random_sleep_within_cap():
+    import asyncio
+    import random as rnd
+
+    from poster.config import MAX_ALLOWED_DELAY
+    from poster.flows import human_sleep
+
+    cfg = load_config(env_file=REPO / "nonexistent.env")  # defaults -> clamped
+    vals = []
+    real_uniform = rnd.uniform
+
+    def fake_uniform(a, b):
+        v = real_uniform(a, b)
+        vals.append(v)
+        return v
+
+    orig = asyncio.sleep
+    asyncio.sleep = lambda s: orig(0)
+    try:
+        rnd.uniform = fake_uniform
+        for _ in range(200):
+            asyncio.run(human_sleep(cfg, lambda *_: None))
+    finally:
+        rnd.uniform = real_uniform
+        asyncio.sleep = orig
+    assert vals and max(vals) <= MAX_ALLOWED_DELAY
+    assert len(set(vals)) > 1  # random, not a constant
 
 
 def test_collect_photos_sorted(tmp_path):
