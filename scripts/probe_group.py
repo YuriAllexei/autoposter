@@ -34,13 +34,18 @@ NON_APP_URLS = re.compile(
 
 OPEN_ACCOUNT_MENU_JS = r"""
 (() => {
-  const btns = Array.from(document.querySelectorAll('[role="button"]')).filter(el => {
+  const cands = Array.from(document.querySelectorAll('[role="button"]')).filter(el => {
     const r = el.getBoundingClientRect();
-    return r.width > 0 && r.top < 70 && r.left > innerWidth * 0.5 && el.querySelector('img');
+    if (r.width <= 0 || r.top > 90 || !el.querySelector('img')) return false;
+    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+    const rightish = r.left > innerWidth * 0.4;
+    const named = /cuenta|account|perfil|profile|configuraci/.test(aria);
+    return rightish && (named || r.top < 70);
   });
-  if (!btns.length) return 'no-account-button';
-  btns[btns.length - 1].click();
-  return 'clicked-account';
+  if (!cands.length) return 'no-account-button';
+  cands.sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left);
+  cands[0].click();
+  return 'clicked-account:' + (cands[0].getAttribute('aria-label') || '');
 })()
 """
 
@@ -60,6 +65,17 @@ CLICK_PROFILE_ITEM_JS = r"""
 })("%NAME%")
 """
 
+
+MENU_OPEN_JS = r"""
+(() => {
+  for (const el of document.querySelectorAll('[role="menuitem"],[role="button"],span,div')) {
+    const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && t && t.length < 200 && t.includes('%NAME%')) return true;
+  }
+  return false;
+})()
+"""
 
 DETECT_JS = r"""
 (() => {
@@ -85,7 +101,7 @@ DETECT_JS = r"""
   const out = { url: location.href, title: document.title, group_name: '', hits: {} };
   const h1 = document.querySelector('h1');
   if (h1) out.group_name = (h1.innerText || '').trim().slice(0, 120);
-  const COMPOSER_RE = /escribe algo|write something|qu[eé] estás|create (a )?post|publicaci[oó]n|what's on your mind/i;
+  const COMPOSER_RE = /escribe algo|write something|qu[eé] estás pensando|what'?s on your mind/i;
   const PHOTO_RE = /foto|photo|imagen|image/i;
   const PUBLISH_RE = /^(publicar|post|publish)$/i;
 
@@ -202,8 +218,33 @@ async def main() -> int:
             except Exception as e:
                 print(f"[probe] auto-switch failed: {type(e).__name__}: {e}", flush=True)
             switched = False
-            for _ in range(15):
-                await page.wait_for_timeout(2000)
+            attempts = 0
+            deadline_sw = time.time() + 600
+            while not switched and time.time() < deadline_sw:
+                await page.wait_for_timeout(5000)
+                if (await cookie_map()).get("i_user") == CARMAZON_ID:
+                    switched = True
+                    break
+                # bounded auto-switch retries; after that, pure cookie polling
+                # so we never fight a manual user interaction with the menu.
+                if attempts >= 4:
+                    continue
+                attempts += 1
+                try:
+                    if "facebook.com" not in page.url:
+                        await page.goto("https://www.facebook.com/", timeout=60000)
+                    menu_open = await page.evaluate(
+                        MENU_OPEN_JS.replace("%NAME%", CARMAZON_NAME))
+                    if not menu_open:
+                        await page.evaluate(OPEN_ACCOUNT_MENU_JS)
+                        await page.wait_for_timeout(1500)
+                    r2 = await page.evaluate(
+                        CLICK_PROFILE_ITEM_JS.replace("%NAME%", CARMAZON_NAME))
+                    print(f"[probe] switch attempt {attempts}: "
+                          f"menu_open={menu_open} -> {r2}", flush=True)
+                except Exception:
+                    pass
+                await page.wait_for_timeout(5000)
                 if (await cookie_map()).get("i_user") == CARMAZON_ID:
                     switched = True
                     break
@@ -234,6 +275,8 @@ async def main() -> int:
             except Exception:
                 continue
         await page.wait_for_timeout(5000)
+        await page.evaluate("window.scrollTo(0, 0)")
+        await page.wait_for_timeout(2000)
 
         raw = await page.evaluate(DETECT_JS)
         report = json.loads(raw)
