@@ -52,18 +52,16 @@ if [[ "$WITH_ALIAS" == 1 ]]; then
   BLOCK="$(mktemp)"
   cat > "$BLOCK" <<'EOF'
 # >>> autoposter >>>
-# ap-record [group-url-or-id] [extra recorder flags] — record a manual
-# session into the persistent bot profile; captures everything you do
-# anywhere. No arg = bare browser, you navigate by hand. First run: log
-# in by hand. q+Enter saves + prompts for a purpose/label.
+# ap-record [URL] [extra recorder flags] — record a manual browser session.
+# Bare browser with no URL; captures everything you do, any site.
+# Profile dir override: AP_RECORD_PROFILE=<dir> (default: the bot's FB profile).
+# q+Enter saves + prompts for purpose/label.
 # Dumps: .local-capture/manual_session/<site>/<stamp>[_label]/
 ap-record() {
-  local url="" extra=()
-  [[ -n "$1" && "$1" != -* ]] && { url="$1"; shift; }
-  [[ "$url" =~ ^[0-9]+$ ]] && url="https://www.facebook.com/groups/$url"
-  [[ -n "$url" ]] && extra=(--url "$url")
+  local extra=()
+  [[ -n "$1" && "$1" != -* ]] && { extra=(--url "$1"); shift; }
   cd /REPO_PATH && poetry run python scraping_recorder/record_session.py \
-    "${extra[@]}" --profile .local-capture/profiles/facebook \
+    "${extra[@]}" --profile "${AP_RECORD_PROFILE:-.local-capture/profiles/facebook}" \
     --out .local-capture/manual_session --trace "$@"
 }
 # ap-timeline [dump-dir] [--full] — review dump (default: newest by summary.json)

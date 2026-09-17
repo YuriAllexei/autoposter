@@ -31,8 +31,9 @@ poetry run pytest scraping_recorder/tests -q
 ```
 
 Convenience (from `setup.sh`, registered in the shell rc):
-`ap-record [url-or-id]` = the record command above (no arg = bare browser);
-`ap-timeline [dir] [--full]` = newest dump under `.local-capture/manual_session/`.
+`ap-record [URL]` = the record command above (no arg = bare browser, any site;
+`AP_RECORD_PROFILE=<dir>` overrides the profile); `ap-timeline [dir] [--full]`
+= newest dump under `.local-capture/manual_session/`.
 
 Recorder console: `s`+Enter screenshot+note, `q`+Enter quit & flush.
 Submodule gotchas: see `scraping_recorder/AGENTS.md` (poetry-install warning is
