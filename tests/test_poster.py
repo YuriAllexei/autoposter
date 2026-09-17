@@ -23,6 +23,9 @@ def test_config_env_file_and_real_env_override(tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("AP_DRY_RUN=false\nAP_DELAY_MIN_SECONDS=5\nAP_DELAY_MAX_SECONDS=9\n")
     monkeypatch.delenv("AP_DRY_RUN", raising=False)
+    # a shell that exported .env would otherwise win over the file under test
+    monkeypatch.delenv("AP_DELAY_MIN_SECONDS", raising=False)
+    monkeypatch.delenv("AP_DELAY_MAX_SECONDS", raising=False)
     cfg = load_config(env_file=env)
     assert cfg.dry_run is False
     assert (cfg.delay_min, cfg.delay_max) == (5.0, 7.0)  # 9 clamped to hard cap
@@ -30,7 +33,9 @@ def test_config_env_file_and_real_env_override(tmp_path, monkeypatch):
     assert load_config(env_file=env).dry_run is True
 
 
-def test_delay_bounds_validated(tmp_path):
+def test_delay_bounds_validated(tmp_path, monkeypatch):
+    monkeypatch.delenv("AP_DELAY_MIN_SECONDS", raising=False)
+    monkeypatch.delenv("AP_DELAY_MAX_SECONDS", raising=False)
     env = tmp_path / ".env"
     env.write_text("AP_DELAY_MIN_SECONDS=100\nAP_DELAY_MAX_SECONDS=50\n")
     with pytest.raises(ValueError, match="delay"):
@@ -131,3 +136,24 @@ def test_flow_registry_covers_groups_file():
     groups = json.loads((REPO / "data/groups.json").read_text(encoding="utf-8"))
     for g in groups["groups"]:
         assert g["posting_code"] in flows.REGISTRY, g["posting_code"]
+
+
+def test_monitoring_config_fields(tmp_path, monkeypatch):
+    # real env must not leak into the test (loader prefers os.environ over .env)
+    monkeypatch.delenv("AP_LEDGER_FILE", raising=False)
+    monkeypatch.delenv("AP_DISCORD_WEBHOOK_URL", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("AP_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1/abc\n"
+                   "AP_LEDGER_FILE=state/ledger.jsonl\n")
+    cfg = load_config(env_file=env)
+    assert cfg.discord_webhook_url == "https://discord.com/api/webhooks/1/abc"
+    # relative AP_LEDGER_FILE is resolved against the repo root, not tmp_path
+    assert cfg.ledger_file == REPO / "state" / "ledger.jsonl"
+
+
+def test_monitoring_config_defaults(tmp_path, monkeypatch):
+    monkeypatch.delenv("AP_LEDGER_FILE", raising=False)
+    monkeypatch.delenv("AP_DISCORD_WEBHOOK_URL", raising=False)
+    cfg = load_config(env_file=tmp_path / "absent.env")
+    assert cfg.discord_webhook_url == ""           # empty => notify skipped
+    assert cfg.ledger_file.name == "ledger.jsonl"

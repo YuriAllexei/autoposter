@@ -93,6 +93,11 @@ class Config:
     screenshot_dir: Path = field(default=Path(".local-capture/shots"))
     dump_on_error: bool = True
 
+    # ---- monitoring (see poster/results.py, poster/notify.py) ----
+    ledger_file: Path = field(
+        default=Path(".local-capture/results/ledger.jsonl"))
+    discord_webhook_url: str = ""
+
     @property
     def repo_root(self) -> Path:
         return REPO_ROOT
@@ -132,6 +137,9 @@ def load_config(env_file: Path | None = None) -> Config:
         log_dir=_as_path(get("AP_LOG_DIR"), ".local-capture/logs"),
         screenshot_dir=_as_path(get("AP_SCREENSHOT_DIR"), ".local-capture/shots"),
         dump_on_error=_as_bool(get("AP_DUMP_ON_ERROR"), True),
+        ledger_file=_as_path(get("AP_LEDGER_FILE"),
+                             ".local-capture/results/ledger.jsonl"),
+        discord_webhook_url=(get("AP_DISCORD_WEBHOOK_URL") or "").strip(),
     )
     if cfg.delay_min < 0 or cfg.delay_max < cfg.delay_min:
         raise ValueError(
