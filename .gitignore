@@ -1,0 +1,3 @@
+.local-capture/
+*.venv/
+__pycache__/

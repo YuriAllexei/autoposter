@@ -1,0 +1,3 @@
+[submodule "scraping_recorder"]
+	path = scraping_recorder
+	url = https://github.com/YuriAllexei/scraping_recorder.git
