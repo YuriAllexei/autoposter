@@ -25,9 +25,41 @@ from pathlib import Path
 from playwright.async_api import async_playwright, BrowserContext
 
 DEFAULT_GROUP = "https://www.facebook.com/groups/249803862915566"
+# posting must happen as the professional profile, not the main account
+CARMAZON_ID = "61592323007979"
+CARMAZON_NAME = "Carmazon"
 NON_APP_URLS = re.compile(
     r"/(login|checkpoint|two_step_verification|recover|security)/|recaptcha|/tr/"
 )
+
+OPEN_ACCOUNT_MENU_JS = r"""
+(() => {
+  const btns = Array.from(document.querySelectorAll('[role="button"]')).filter(el => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.top < 70 && r.left > innerWidth * 0.5 && el.querySelector('img');
+  });
+  if (!btns.length) return 'no-account-button';
+  btns[btns.length - 1].click();
+  return 'clicked-account';
+})()
+"""
+
+CLICK_PROFILE_ITEM_JS = r"""
+((want) => {
+  const els = Array.from(
+    document.querySelectorAll('[role="menuitem"], [role="button"], span, div')
+  ).filter(el => {
+    const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && t && t.length < 200 && t.includes(want);
+  });
+  if (!els.length) return 'no-profile-item';
+  const row = els[0].closest('[role="menuitem"],[role="button"]') || els[0];
+  row.click();
+  return 'clicked:' + row.tagName.toLowerCase() + ':' + row.getAttribute('role');
+})("%NAME%")
+"""
+
 
 DETECT_JS = r"""
 (() => {
@@ -119,41 +151,95 @@ async def main() -> int:
             str(profile), headless=False
         )
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        print(f"[probe] opening {args.group_url}", flush=True)
+
+        async def is_authed() -> bool:
+            cookies = await ctx.cookies("https://www.facebook.com")
+            return any(c.get("name") == "c_user" and c.get("value") for c in cookies)
+
+        deadline = time.time() + args.login_timeout
+        sent_to_login = False
+        while not await is_authed():
+            if time.time() > deadline:
+                print("[probe] TIMEOUT: still not logged in. Nothing detected.", flush=True)
+                await ctx.close()
+                return 2
+            try:
+                url = page.url
+                on_fb = url.startswith("https://www.facebook.com") or url.startswith("https://m.facebook.com")
+                if not on_fb and not sent_to_login:
+                    await page.goto("https://www.facebook.com/login/", timeout=60000)
+                    sent_to_login = True
+                    print("[probe] opened login page.", flush=True)
+                if not sent_to_login or not on_fb:
+                    print("[probe] LOGGED OUT — log in inside the Firefox window (email, "
+                          "password, 2FA). The page will NOT be touched or refreshed "
+                          "while you work; this script only watches cookies.", flush=True)
+                    sent_to_login = True
+                await page.wait_for_timeout(4000)
+            except Exception as e:
+                print(f"[probe] waiting for login ({type(e).__name__})", flush=True)
+                await asyncio.sleep(4)
+
+        print("[probe] session OK (c_user cookie present)", flush=True)
+
+        async def cookie_map() -> dict:
+            return {c.get("name"): c.get("value") for c in await ctx.cookies("https://www.facebook.com")}
+
+        # ensure the ACTIVE profile is Carmazon (i_user cookie), not the main account
+        if (await cookie_map()).get("i_user") != CARMAZON_ID:
+            print(f"[probe] logged in but NOT as {CARMAZON_NAME} (i_user="
+                  f"{(await cookie_map()).get('i_user')}) — auto-switching via the "
+                  "profile menu...", flush=True)
+            try:
+                if "facebook.com" not in page.url:
+                    await page.goto("https://www.facebook.com/", timeout=60000)
+                await page.wait_for_timeout(3000)
+                r1 = await page.evaluate(OPEN_ACCOUNT_MENU_JS)
+                await page.wait_for_timeout(2000)
+                r2 = await page.evaluate(
+                    CLICK_PROFILE_ITEM_JS.replace("%NAME%", CARMAZON_NAME))
+                print(f"[probe] switch clicks: {r1} -> {r2}", flush=True)
+            except Exception as e:
+                print(f"[probe] auto-switch failed: {type(e).__name__}: {e}", flush=True)
+            switched = False
+            for _ in range(15):
+                await page.wait_for_timeout(2000)
+                if (await cookie_map()).get("i_user") == CARMAZON_ID:
+                    switched = True
+                    break
+            if not switched:
+                print(f"[probe] STILL not {CARMAZON_NAME} — open the top-right "
+                      "profile picture in the window and click it manually. Waiting "
+                      "up to 10 min for the switch...", flush=True)
+                end = time.time() + 600
+                while time.time() < end and not switched:
+                    await asyncio.sleep(3)
+                    switched = (await cookie_map()).get("i_user") == CARMAZON_ID
+                if not switched:
+                    print("[probe] TIMEOUT: never switched. Aborting without touching "
+                          "the group.", flush=True)
+                    await ctx.close()
+                    return 3
+        print(f"[probe] active profile = {CARMAZON_NAME} (i_user={CARMAZON_ID})", flush=True)
+
         try:
             await page.goto(args.group_url, wait_until="domcontentloaded", timeout=60000)
         except Exception as e:  # FB often stalls domcontentloaded on long-poll
             print(f"[probe] goto note: {e}", flush=True)
-
-        deadline = time.time() + args.login_timeout
-        authed = False
-        while time.time() < deadline and not authed:
+        # wait for the logged-in group feed to hydrate (composer visible)
+        for probe_text in ("Escribe algo", "Write something", "¿Qué estás"):
             try:
-                url = page.url
-            except Exception:
-                url = ""
-            if url.startswith("https://www.facebook.com") and not NON_APP_URLS.search(url):
-                authed = True
+                await page.wait_for_selector(f"text={probe_text}", timeout=15000)
                 break
-            print("[probe] not authenticated yet — log in inside the Firefox window "
-                  "(email, password, 2FA). Waiting...", flush=True)
-            await page.wait_for_timeout(4000)
-        if not authed:
-            print("[probe] TIMEOUT: no authenticated session found. Nothing detected.", flush=True)
-            await ctx.close()
-            return 2
-
-        # make sure we are on the group page regardless of where login left us
-        if "/groups/" not in page.url:
-            try:
-                await page.goto(args.group_url, wait_until="domcontentloaded", timeout=60000)
             except Exception:
-                pass
-        print("[probe] session OK — letting the group feed hydrate (12 s)...", flush=True)
-        await page.wait_for_timeout(12000)
+                continue
+        await page.wait_for_timeout(5000)
 
         raw = await page.evaluate(DETECT_JS)
         report = json.loads(raw)
+        cm = await cookie_map()
+        report["c_user"] = cm.get("c_user")
+        report["i_user"] = cm.get("i_user")
         report["ts"] = datetime.now(UTC).isoformat()
         report["logged_in"] = True
 
