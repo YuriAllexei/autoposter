@@ -54,6 +54,7 @@ OPEN_ACCOUNT_MENU_JS = r"""
 
 CLICK_PROFILE_ITEM_JS = r"""
 ((want) => {
+  document.querySelectorAll('[data-ap-switch]').forEach(e => e.removeAttribute('data-ap-switch'));
   const els = Array.from(
     document.querySelectorAll('[role="menuitem"], [role="button"], span, div')
   ).filter(el => {
@@ -62,9 +63,14 @@ CLICK_PROFILE_ITEM_JS = r"""
     return r.width > 0 && t && t.length < 200 && t.includes(want);
   });
   if (!els.length) return 'no-profile-item';
-  const row = els[0].closest('[role="menuitem"],[role="button"]') || els[0];
-  row.click();
-  return 'clicked:' + row.tagName.toLowerCase() + ':' + row.getAttribute('role');
+  // smallest containing clickable row = the LAST match (most specific/innermost is too
+  // small); FB wants the row-level node with a React handler:
+  const inner = els[els.length - 1];
+  const row = inner.closest('[role="menuitem"],[role="button"],[role="listitem"]') || inner;
+  row.setAttribute('data-ap-switch', '1');
+  const r = row.getBoundingClientRect();
+  return 'stamped:' + row.tagName.toLowerCase() + ':' + row.getAttribute('role')
+    + ':' + Math.round(r.x + r.width / 2) + ',' + Math.round(r.y + r.height / 2);
 })("%NAME%")
 """
 
@@ -213,13 +219,33 @@ async def main() -> int:
                 if "facebook.com" not in page.url:
                     await page.goto("https://www.facebook.com/", timeout=60000)
                 await page.wait_for_timeout(3000)
+            except Exception as e:
+                print(f"[probe] pre-switch nav failed: {type(e).__name__}", flush=True)
+
+            async def try_switch():
                 r1 = await page.evaluate(OPEN_ACCOUNT_MENU_JS)
                 await page.wait_for_timeout(2000)
                 r2 = await page.evaluate(
                     CLICK_PROFILE_ITEM_JS.replace("%NAME%", CARMAZON_NAME))
-                print(f"[probe] switch clicks: {r1} -> {r2}", flush=True)
-            except Exception as e:
-                print(f"[probe] auto-switch failed: {type(e).__name__}: {e}", flush=True)
+                if r2.startswith("stamped:"):
+                    try:
+                        await page.locator('[data-ap-switch="1"]').first.click(timeout=5000)
+                        return f"{r1} -> trusted-click ({r2})"
+                    except Exception as e:
+                        return f"{r1} -> click-fail {type(e).__name__} ({r2})"
+                return f"{r1} -> {r2}"
+
+            async def try_switch_row_only():
+                r2 = await page.evaluate(
+                    CLICK_PROFILE_ITEM_JS.replace("%NAME%", CARMAZON_NAME))
+                if r2.startswith("stamped:"):
+                    try:
+                        await page.locator('[data-ap-switch="1"]').first.click(timeout=5000)
+                        return f"trusted-click ({r2})"
+                    except Exception as e:
+                        return f"click-fail {type(e).__name__} ({r2})"
+                return r2
+
             switched = False
             attempts = 0
             deadline_sw = time.time() + 600
@@ -228,25 +254,21 @@ async def main() -> int:
                 if (await cookie_map()).get("i_user") == CARMAZON_ID:
                     switched = True
                     break
-                # bounded auto-switch retries; after that, pure cookie polling
-                # so we never fight a manual user interaction with the menu.
-                if attempts >= 4:
-                    continue
+                if attempts >= 6:
+                    continue  # stop clicking; let the user finish a manual switch
                 attempts += 1
                 try:
-                    if "facebook.com" not in page.url:
-                        await page.goto("https://www.facebook.com/", timeout=60000)
                     menu_open = await page.evaluate(
                         MENU_OPEN_JS.replace("%NAME%", CARMAZON_NAME))
                     if not menu_open:
-                        await page.evaluate(OPEN_ACCOUNT_MENU_JS)
-                        await page.wait_for_timeout(1500)
-                    r2 = await page.evaluate(
-                        CLICK_PROFILE_ITEM_JS.replace("%NAME%", CARMAZON_NAME))
-                    print(f"[probe] switch attempt {attempts}: "
-                          f"menu_open={menu_open} -> {r2}", flush=True)
-                except Exception:
-                    pass
+                        print(f"[probe] switch try {attempts}: "
+                              f"{await try_switch()}", flush=True)
+                    else:
+                        # menu already open; just click the stamped row
+                        print(f"[probe] switch row (menu open): "
+                              f"{await try_switch_row_only()}", flush=True)
+                except Exception as e:
+                    print(f"[probe] switch err: {type(e).__name__}", flush=True)
                 await page.wait_for_timeout(5000)
                 if (await cookie_map()).get("i_user") == CARMAZON_ID:
                     switched = True
