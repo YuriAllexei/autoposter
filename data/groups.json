@@ -1,0 +1,18 @@
+{
+  "$comment": [
+    "Target groups registry. ONE post per group per run.",
+    "posting_code = the name of the Python function implementing THAT group's flow",
+    "(poster/flows.py::<posting_code>). One function per group; unknown code = hard error, no guessing.",
+    "photos_order: 'sorted' = car subfolders of data/car_photos in name order (NN_ prefixes)."
+  ],
+  "groups": [
+    {
+      "name": "VENTAS DE CARROS CUAUHTÉMOC 💥 CHIHUAHUA",
+      "group_url": "https://www.facebook.com/groups/249803862915566",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "$note": "Flow proven by recording 20260917T014025Z + scripts/dryrun_post.py up to (but never incl.) Publicar."
+    }
+  ]
+}
