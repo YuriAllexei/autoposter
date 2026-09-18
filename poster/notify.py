@@ -14,6 +14,9 @@ import urllib.request
 EMBED_DESC_LIMIT = 4096
 ICON = {"published": "✅", "staged": "🧪", "failed": "❌"}
 COLOR_OK, COLOR_DRY, COLOR_BAD = 0x2ECC71, 0xF1C40F, 0xE74C3C
+# Discord sits behind Cloudflare: the default Python-urllib UA gets HTTP 403
+# error code 1010 (proven 2026-09-17), so we must announce ourselves.
+USER_AGENT = "autoposter/0.1 (facebook group posting monitor)"
 
 
 def build_payload(summary: dict, profile_name: str = "") -> dict:
@@ -64,7 +67,7 @@ def send_summary(webhook_url: str, payload: dict, log=print,
     for attempt in (1, 2):
         req = urllib.request.Request(
             webhook_url, data=data, method="POST",
-            headers={"Content-Type": "application/json"})
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if resp.status in (200, 204):
