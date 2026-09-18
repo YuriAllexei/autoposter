@@ -11,7 +11,8 @@ recordings via the `scraping_recorder` submodule; flows can differ per group.
   via `poetry run ...`, never bare `python3`/`pip`.** Setup: `poetry install`
   (playwright + pytest/ruff); browsers: `poetry run playwright install firefox`.
 - Login = cookies in the persistent profile at `.local-capture/profiles/facebook`
-  (does NOT exist yet on this host — first headed run needs manual login).
+  (exists and is authed on this host as of 2026-09-17: c_user present,
+  i_user=Carmazon; re-login manually only if cookies expire).
   Passwords never in code/env.
 
 ```bash
@@ -38,6 +39,16 @@ poetry run python -m poster.main --group 249803862915566
 poetry run python -m poster.main --live
 
 poetry run pytest tests scraping_recorder/tests -q
+
+# MONITORING: after EVERY finished run (aborts/crashes included) the bot
+# posts ONE Discord embed summarizing ✅/❌ per group + all-time published
+# count per page. No bot token needed — channel webhook only (set
+# AP_DISCORD_WEBHOOK_URL in .env; see .env.example MONITORING block).
+# Ledger = .local-capture/results/ledger.jsonl (gitignored, JSONL):
+poetry run python -m poster.notify --test    # send a fake summary, verify webhook
+poetry run python -m poster.notify --stats   # all-time published count per group
+# GOTCHA: Discord/Cloudflare 403s (error 1010) urllib's default User-Agent —
+# poster/notify.py sends a custom one; never "simplify" that header away.
 ```
 
 Convenience (from `setup.sh`, registered in the shell rc):
@@ -63,6 +74,10 @@ harmless; use `poetry run python -m pytest`, not PATH pytest).
    short — 3-7s, and the loader hard-caps any config at 7s (never longer).
 6. DEV SAFETY: never post or comment unless the selector is proven against a
    recording/dry-run. `AP_DRY_RUN=true` is default and fail-safe.
+7. MONITORING: exactly ONE Discord summary per run, sent only after it ends
+   (success, failure, abort, crash — all notify). Dry-run attempts record as
+   `staged` and NEVER count as published. A webhook failure never changes
+   the run's exit code (`poster/notify.py` swallows everything).
 
 ## Protocol facts (from recording 2026-09-17, group 249803862915566 Cuauhtémoc)
 
@@ -81,6 +96,7 @@ harmless; use `poetry run python -m pytest`, not PATH pytest).
 
 - All knobs in `.env` (`AP_` prefix, see `.env.example`); `.env`,
   `.local-capture/**`, and `data/car_photos/**` images are gitignored.
-- Roadmap: photo recording → `poster/` package (config, dispatcher,
-  filechooser upload) → more groups (record → new flow fn → groups.json) →
-  scheduler + delivery verification.
+- Roadmap: photo recording → monitoring/Discord summary ✅ (done 2026-09-17:
+  poster/results.py + poster/notify.py) → more groups (record → new flow fn →
+  groups.json) → scheduler + delivery verification (parse my_pending_content
+  so "published" can mean admin-approved).
