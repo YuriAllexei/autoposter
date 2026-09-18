@@ -191,10 +191,13 @@ async def _wait_upload_settled(page: Page, log: log_fn) -> None:
 
 async def group_composer_es_v1(
     page: Page, post: Post, cfg: Config, log: log_fn = print
-) -> None:
+) -> dict:
     """Spanish group composer (group 249803862915566 & same-layout groups):
     feed trigger 'Escribe algo...' -> modal -> text 1:1 -> photos ->
     random delay -> Publicar (only when AP_DRY_RUN=false).
+
+    Returns {'evidence': <screenshot path>} after a successful DRY run (the
+    runner stamps the group index with it) or {'published': True} when live.
 
     The runner has ALREADY navigated to the group URL and waited for feed
     hydration; this owns composer-internal steps only. All actions scoped to
@@ -288,15 +291,16 @@ async def group_composer_es_v1(
             log("closed composer (nothing posted)")
         except Exception:
             pass
-        return
+        return {"evidence": str(shot)}
 
     await pub.click(timeout=5000)
     log("CLICKED Publicar")
+    return {"published": True}
 
 
 # ---- registry / dispatcher ----------------------------------------------------
 
-REGISTRY: dict[str, Callable[..., Awaitable[None]]] = {
+REGISTRY: dict[str, Callable[..., Awaitable[dict]]] = {
     "group_composer_es_v1": group_composer_es_v1,
 }
 

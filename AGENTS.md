@@ -38,6 +38,12 @@ poetry run python -m poster.main --group 249803862915566
 # --live only works when .env already has AP_DRY_RUN=false (fail-safe by design)
 poetry run python -m poster.main --live
 
+# GROUP INDEX: per-group pipeline state (recording found on disk? flow fn in
+# REGISTRY? dry-run stamp in data/dryrun_ok.json?) + GAPS: recordings never
+# wired into groups.json, entries whose posting_code has no function.
+# The stamp file is per-machine (gitignored): a fresh clone starts unverified.
+poetry run python -m poster.main --status      # alias: ap-status
+
 poetry run pytest tests scraping_recorder/tests -q
 
 # MONITORING: after EVERY finished run (aborts/crashes included) the bot
@@ -89,8 +95,20 @@ harmless; use `poetry run python -m pytest`, not PATH pytest).
   `.click()` — JS-dispatched `.click()` and raw `mouse.click(x,y)` both fail
   (untrusted / no auto-scroll).
 - Posts go through group admin approval → verify via `/groups/<id>/my_pending_content/`.
-- Photo upload traffic NOT yet captured (only text recording exists).
-  Required before real photo posts: record a session WITH photos.
+- Photo attach PROVEN (recording 20260917T063422Z): composer dialog holds a
+  hidden `input[type=file]`; picking a file POSTs to
+  `upload.facebook.com/ajax/react_composer/attachments/photo/upload`.
+  Bot answers the OS dialog via set_input_files / FileChooser — never clicks through it.
+
+## Group pipeline workflow (the index)
+
+ap-record → implement → verify is tracked automatically (`poster/groups_index.py`,
+alias `ap-status` / `--status`): status is COMPUTED from three sources
+(dumps on disk, REGISTRY functions, per-machine `data/dryrun_ok.json` stamp
+written after a successful dry run), never hand-declared. When wiring a new
+group: add its entry to `data/groups.json` with a `posting_code` — until the
+flow function exists the index shows it as a GAP, so nothing can be forgotten
+between recording and implementation.
 
 ## Conventions
 

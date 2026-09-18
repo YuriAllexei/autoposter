@@ -3,7 +3,9 @@
     "Target groups registry. ONE post per group per run.",
     "posting_code = the name of the Python function implementing THAT group's flow",
     "(poster/flows.py::<posting_code>). One function per group; unknown code = hard error, no guessing.",
-    "photos_order: 'sorted' = car subfolders of data/car_photos in name order (NN_ prefixes)."
+    "photos_order: 'sorted' = car subfolders of data/car_photos in name order (NN_ prefixes).",
+    "Optional 'recording': ap-record dump dir this flow was built from (auto-detected from .local-capture when omitted).",
+    "Index of states is computed by `poetry run python -m poster.main --status` (alias: ap-status)."
   ],
   "groups": [
     {

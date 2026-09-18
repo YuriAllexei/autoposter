@@ -7,3 +7,9 @@ __pycache__/
 data/car_photos/**
 !data/car_photos/README.txt
 !data/car_photos/.gitkeep
+
+# dry-run verification state is per-machine (fresh clone = unverified = safe)
+data/dryrun_ok.json
+
+# Hermes session state in workspace (not project files)
+.hermes/

@@ -105,7 +105,7 @@ async def run_group(
     await page.evaluate("window.scrollTo(0, 0)")
     await page.wait_for_timeout(2000)
     try:
-        await flow(page, post, cfg, log)
+        result = await flow(page, post, cfg, log)
     except FlowError as e:
         log(f"[group] FLOW ERROR: {e}")
         try:
@@ -113,6 +113,13 @@ async def run_group(
         except Exception:
             pass
         return False, f"flow_error: {e}"
+    if cfg.dry_run and result and result.get("evidence"):
+        # tracker: a SUCCEEDED dry run stamps the group as dry-run verified
+        from .groups_index import stamp_dryrun_ok
+        stamp = stamp_dryrun_ok(group["group_url"], result["evidence"])
+        if stamp:
+            log(f"index: dry-run verified -> data/dryrun_ok.json "
+                f"({stamp['ts']})")
     if not cfg.dry_run:
         await verify_pending(page, group["group_url"], cfg, log)
     return True, None
@@ -220,6 +227,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         prog="poster", description="Facebook group auto-poster (see AGENTS.md)")
     ap.add_argument("--group", help="only this group (url substring or exact name)")
+    ap.add_argument("--status", action="store_true",
+                    help="print the group index (recorded/implemented/dry-run "
+                         "states + gaps) and exit — no browser")
     ap.add_argument("--dry-run", dest="dry", action="store_true", default=None,
                     help="force dry run regardless of .env")
     ap.add_argument("--live", dest="live", action="store_true",
@@ -228,6 +238,11 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_config()
+    if args.status:
+        # no browser, no mutations: pure index report (also aliased ap-status)
+        from .groups_index import status_report
+        print(status_report(cfg))
+        return 0
     if args.dry:
         cfg.dry_run = True
     if args.live and not args.dry:

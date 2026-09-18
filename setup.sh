@@ -74,6 +74,11 @@ ap-timeline() {
   echo "reviewing: $dump"
   cd /REPO_PATH && poetry run python scraping_recorder/session_timeline.py "$dump" "$@"
 }
+# ap-status — group implementation index: recorded / implemented / dry-run
+# verified, plus gaps (recordings not wired into groups.json, missing fns).
+ap-status() {
+  cd /REPO_PATH && poetry run python -m poster.main --status
+}
 # <<< autoposter <<<
 EOF
   sed -i "s|/REPO_PATH|${REPO}|g" "$BLOCK"
