@@ -56,10 +56,12 @@ poetry run python -m poster.notify --stats   # all-time published count per grou
 # poster/notify.py sends a custom one; never "simplify" that header away.
 ```
 
-Convenience (from `setup.sh`, registered in the shell rc):
-`ap-record [URL]` = the record command above (no arg = bare browser, any site;
-`AP_RECORD_PROFILE=<dir>` overrides the profile); `ap-timeline [dir] [--full]`
-= newest dump under `.local-capture/manual_session/`.
+Convenience (from `setup.sh`, registered in the shell rc): commands live in
+`shell/autoposter.sh` (bash + zsh compatible; rc file gets a single source
+line, repo path self-resolves). `ap-record [URL]` = the record command above
+(no arg = bare browser, any site; `AP_RECORD_PROFILE=<dir>` overrides the
+profile); `ap-timeline [dir] [--full]` = newest dump under
+`.local-capture/manual_session/`; `ap-status` = `poster.main --status`.
 
 Recorder console: `s`+Enter screenshot+note, `q`+Enter quit & flush.
 Submodule gotchas: see `scraping_recorder/AGENTS.md` (poetry-install warning is

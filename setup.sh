@@ -35,7 +35,37 @@ poetry install
 
 if [[ "$WITH_BROWSER" == 1 ]]; then
   echo "==> playwright firefox (skips download if already present)"
-  poetry run playwright install firefox
+  # Non-fatal: a download hiccup must not abort setup before the shell
+  # commands are registered (that left teammates with no ap-* commands).
+  poetry run playwright install firefox || \
+    echo "   !! firefox download failed — rerun later: poetry run playwright install firefox" >&2
+fi
+
+if [[ "$WITH_ALIAS" == 1 ]]; then
+  echo "==> registering ap-* commands in ${ALIAS_FILE} (helper: shell/autoposter.sh)"
+  MARKER="# >>> autoposter >>>"
+  # replace existing block in place, else append
+  python3 - "$ALIAS_FILE" "$MARKER" "${REPO}/shell/autoposter.sh" <<'PYEOF'
+import pathlib, sys
+rc_path, marker, helper = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+s = rc_path.read_text() if rc_path.exists() else ""
+end_marker = "# <<< autoposter <<<"
+block = marker + "\n. " + helper + "\n" + end_marker
+start, end = s.find(marker), s.find(end_marker)
+if start != -1 and end != -1:
+    s = s[:start] + block + s[end + len(end_marker):]
+else:
+    s = s.rstrip("\n") + "\n\n" + block + "\n"
+rc_path.write_text(s)
+PYEOF
+  # prove the helper actually defines all three commands in BOTH shells
+  for sh in bash zsh; do
+    if command -v "$sh" >/dev/null; then
+      "$sh" -c ". '${REPO}/shell/autoposter.sh' && type ap-record ap-timeline ap-status >/dev/null" \
+        && echo "    ${sh}: ap-record/ap-timeline/ap-status OK" \
+        || { echo "    ${sh}: FAILED to load shell/autoposter.sh" >&2; exit 1; }
+    fi
+  done
 fi
 
 if [[ ! -f .env ]]; then
@@ -46,56 +76,6 @@ else
 fi
 
 mkdir -p .local-capture/profiles
-
-if [[ "$WITH_ALIAS" == 1 ]]; then
-  echo "==> registering ap-record + ap-timeline in ${ALIAS_FILE}"
-  BLOCK="$(mktemp)"
-  cat > "$BLOCK" <<'EOF'
-# >>> autoposter >>>
-# ap-record [URL] [extra recorder flags] — record a manual browser session.
-# Bare browser with no URL; captures everything you do, any site.
-# Profile dir override: AP_RECORD_PROFILE=<dir> (default: the bot's FB profile).
-# q+Enter saves + prompts for purpose/label.
-# Dumps: .local-capture/manual_session/<site>/<stamp>[_label]/
-ap-record() {
-  local extra=()
-  [[ -n "$1" && "$1" != -* ]] && { extra=(--url "$1"); shift; }
-  cd /REPO_PATH && poetry run python scraping_recorder/record_session.py \
-    "${extra[@]}" --profile "${AP_RECORD_PROFILE:-.local-capture/profiles/facebook}" \
-    --out .local-capture/manual_session --trace "$@"
-}
-# ap-timeline [dump-dir] [--full] — review dump (default: newest by summary.json)
-ap-timeline() {
-  local dump="$1"; shift
-  [[ "$dump" == -* || -f "$dump/summary.json" ]] || { [[ -d "$dump" ]] && dump="$dump/$(ls -1dt "$dump"/*/ 2>/dev/null | head -1)"; }
-  [[ "$dump" == -* ]] && { set -- "$dump"; dump=""; }
-  [[ -z "$dump" || ! -f "$dump/summary.json" ]] && dump=$(find /REPO_PATH/.local-capture/manual_session -maxdepth 3 -name summary.json -printf '%T@ %h\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-  [[ -z "$dump" ]] && { echo "no dumps in .local-capture/manual_session yet"; return 1; }
-  echo "reviewing: $dump"
-  cd /REPO_PATH && poetry run python scraping_recorder/session_timeline.py "$dump" "$@"
-}
-# ap-status — group implementation index: recorded / implemented / dry-run
-# verified, plus gaps (recordings not wired into groups.json, missing fns).
-ap-status() {
-  cd /REPO_PATH && poetry run python -m poster.main --status
-}
-# <<< autoposter <<<
-EOF
-  sed -i "s|/REPO_PATH|${REPO}|g" "$BLOCK"
-  # replace an existing block in place, else append (idempotent re-runs)
-  python3 - "$ALIAS_FILE" "$BLOCK" <<'PYEOF'
-import pathlib, sys
-rc, block = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text()
-s = rc.read_text() if rc.exists() else ""
-start, end = s.find("# >>> autoposter >>>"), s.find("# <<< autoposter <<<")
-if start != -1 and end != -1:
-    s = s[:start] + block.rstrip("\n") + s[end + len("# <<< autoposter <<<"):]
-else:
-    s = s.rstrip("\n") + "\n\n" + block
-rc.write_text(s)
-PYEOF
-  rm -f "$BLOCK"
-fi
 
 cat <<EOF
 
