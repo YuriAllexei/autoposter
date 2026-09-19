@@ -42,6 +42,105 @@
       "enabled": true,
       "recording": ".local-capture/manual_session/facebook/20260919T014657Z",
       "$note": "Recording 20260919T014657Z: same Spanish composer layout (trigger 'Escribe algo...' at 01:47:11, dialog closed via 'Cerrar el cuadro de diálogo del editor'). Layout-only capture — no photo upload or Publicar on the wire; dry run is the verification gate."
+    },
+    {
+      "name": "venta de autos Cuauhtémoc Chihuahua",
+      "group_url": "https://www.facebook.com/groups/202777682653406/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T021519Z",
+      "$note": "Recording 20260919T021519Z (shot_001 'this is where you post'): 'Escribe algo...' -> 'Crear publicación' modal, placeholder 'Crea una publicación pública...', Publicar visible, poster Carmazon. Layout-only capture — zero StoryCreate/upload mutations on the wire; dry run is the verification gate."
+    },
+    {
+      "name": "venta de carros chihuahua",
+      "group_url": "https://www.facebook.com/groups/620585761476775/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T023430Z",
+      "$note": "Recording 20260919T023430Z (shot_001 'this is where you post'): public group 44k members, 'Escribe algo...' -> 'Crear publicación' modal, placeholder 'Crea una publicación pública...', Publicar visible, poster Carmazon. Layout-only capture — zero StoryCreate/upload mutations on the wire; dry run is the verification gate. Distinct group from compra-venta autos chihuahua (3638068359565813)."
+    },
+    {
+      "name": "CARROS EN VENTA CHIHUAHUA",
+      "group_url": "https://www.facebook.com/groups/277203682420532/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T024503Z",
+      "$note": "Recording 20260919T024503Z (shot_001 'this is where you post'): browsed by VANITY slug /groups/CarrosBaratoss/ — numeric id 277203682420532 resolved from the dump's bulk-route-definitions response (groupID+title in same block as slug route); groups_index.resolve_vanity_group_id now does this automatically. Public group 65.8k members, same Spanish composer layout, poster Carmazon. Layout-only capture — zero StoryCreate/upload mutations; dry run is the verification gate."
+    },
+    {
+      "name": "Venta de autos de todos chihuahua",
+      "group_url": "https://www.facebook.com/groups/1421751184704553/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T025711Z",
+      "$note": "Recording 20260919T025711Z (shot_001 'this is where you post'): VANITY slug /groups/carroschihuahua/ -> numeric id resolved via bulk-route-definitions (title 'Venta de autos de todos chihuahua'). Public group 31k members, same Spanish composer layout, poster Carmazon. Layout-only capture — the single ComposerStoryCreate hit is the static JS bundle (module definition, GET), zero story-create POSTs, zero uploads; dry run is the verification gate."
+    },
+    {
+      "name": "solo autos chihuahua chih.",
+      "group_url": "https://www.facebook.com/groups/1408786556112154/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T030437Z",
+      "$note": "Recording 20260919T030437Z (shot_001 'this is where you post'): numeric URL; title 'solo autos chihuahua chih.' verified in bulk-route-definitions + page body. Public group 33.1k members, same Spanish composer layout, poster Carmazon. Layout-only capture — zero story-create POSTs, zero uploads (only useGroupsCometVisitMutation); dry run is the verification gate."
+    },
+    {
+      "name": "Remate de autos usados Chihuahua, compra-venta.",
+      "group_url": "https://www.facebook.com/groups/704429029750087/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T030957Z",
+      "$note": "Recording 20260919T030957Z (shot_001 'this is where you post'): numeric URL; full title 'Remate de autos usados Chihuahua, compra-venta.' from bulk-route-definitions (header render truncates). Public group 80.6k members, same Spanish composer layout, poster Carmazon; dialog closed via 'Cerrar el cuadro de diálogo del editor'. Layout-only capture — zero story-create POSTs, zero uploads; dry run is the verification gate."
+    },
+    {
+      "name": "Venta de autos Chihuahua",
+      "group_url": "https://www.facebook.com/groups/370558960499950/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T031430Z",
+      "$note": "Recording 20260919T031430Z (shot_001 'this is where you post'): numeric URL; title 'Venta de autos Chihuahua' verified in bulk-route-definitions + header. Public group 37.4k members, same Spanish composer layout, poster Carmazon; dialog closed via 'Cerrar el cuadro de diálogo del editor'. Layout-only capture — zero story-create POSTs, zero uploads; dry run is the verification gate."
+    },
+    {
+      "name": "carros barato Chihuahua",
+      "group_url": "https://www.facebook.com/groups/874402543529338/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T031837Z",
+      "$note": "Recording 20260919T031837Z (shot_001 'this is where you post'): numeric URL; title 'carros barato Chihuahua' verified in bulk-route-definitions + header. Public group 50k members, same Spanish composer layout, poster Carmazon. Shot shows Meta Business Suite promo box in composer (account-level AB, also in prior recordings — no selector impact). Layout-only capture — zero story-create POSTs, zero uploads; dry run is the verification gate."
+    },
+    {
+      "name": "carros y trocas chihuahua chih.",
+      "group_url": "https://www.facebook.com/groups/2143593662593525/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T032231Z",
+      "$note": "Recording 20260919T032231Z (shot_001 'this is where you post'): numeric URL; full title 'carros y trocas chihuahua chih.' from bulk-route-definitions (header render truncates to 'carros y trocas chihuahua'). Public group 14.7k members, same Spanish composer layout, poster Carmazon. Layout-only capture — zero story-create POSTs, zero uploads; dry run is the verification gate."
+    },
+    {
+      "name": "AUTOS BARAS CHIWAS",
+      "group_url": "https://www.facebook.com/groups/329040237300265/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T032700Z",
+      "$note": "Recording 20260919T032700Z (shot_001 'this is where you post'): VANITY slug /groups/automundochihuahua/ -> numeric id 329040237300265 resolved via bulk-route-definitions (title 'AUTOS BARAS CHIWAS'; slug name differs from title, both verified). Public group 16.3k members, same Spanish composer layout, poster Carmazon; dialog closed via 'Cerrar el cuadro de diálogo del editor'. Layout-only capture — zero story-create POSTs, zero uploads; dry run is the verification gate."
+    },
+    {
+      "name": "VENTA DE VEHICULOS CHIHUAHUA",
+      "group_url": "https://www.facebook.com/groups/575676838680218/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T033213Z",
+      "$note": "Recording 20260919T033213Z (shot_001 'this is where you post'): numeric URL; title 'VENTA DE VEHICULOS CHIHUAHUA' via doc title + page header (route-def window first showed member names, ignored). Public group 3.6k members, same Spanish composer layout, poster Carmazon; closed via 'Cerrar el cuadro de diálogo del editor'. Layout-only capture — zero story-create POSTs, zero uploads; dry run is the verification gate."
     }
   ]
 }
