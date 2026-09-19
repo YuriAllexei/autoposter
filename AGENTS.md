@@ -8,12 +8,11 @@ recordings via the `scraping_recorder` submodule; flows can differ per group.
 ## Environment / commands
 
 - WSL + WSLg (headed browsers OK). **Poetry manages everything: run all Python
-  via `poetry run ...`, never bare `python3`/`pip`.** Setup: `poetry install`
-  (playwright + pytest/ruff); browsers: `poetry run playwright install firefox`.
-- Login = cookies in the persistent profile at `.local-capture/profiles/facebook`
-  (exists and is authed on this host as of 2026-09-17: c_user present,
-  i_user=Carmazon; re-login manually only if cookies expire).
-  Passwords never in code/env.
+  via `poetry run ...`, never bare `python3`/`pip`.**
+- **New machine (teammate): clone → `git submodule update --init` → `./setup.sh`
+  → edit `.env` → `ap-record` and log into FB by hand once** (creates the
+  persistent profile incl. 2FA; cookies, never passwords, and they are NOT
+  shared between machines — each dev logs in on their own box).
 
 ```bash
 # record a group flow (ground truth; NEVER commit dumps — they hold cookies).

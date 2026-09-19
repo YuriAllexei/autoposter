@@ -99,11 +99,15 @@ fi
 
 cat <<EOF
 
-Done. Next steps:
-  1. source ${ALIAS_FILE}
-  2. ap-record 249803862915566        # opens headed Firefox; log in by hand
-                                        first run, then do the flow you want
-                                        captured (composer -> text -> PHOTOS ->
-                                        Publicar). 'q'+Enter saves the dump.
-  3. ap-timeline --full               # time-ordered review of the dump
+Done. Next steps on a fresh machine:
+  1. cp .env  ->  edit it:   FB IDs (see comments), AP_DISCORD_WEBHOOK_URL
+     (channel webhook — see .env.example), profile/paths if non-default.
+  2. source ${ALIAS_FILE}
+  3. ap-record            # headed Firefox; log into FB BY HAND the first time
+                          # (2FA included — cookies persist in the profile).
+                          # then record whatever group flow you want.
+                          # 'q'+Enter saves the dump + asks purpose/label.
+  4. ap-status            # group index: recorded / implemented / dry-run /
+                          # gaps (recordings not yet wired into groups.json)
+  5. ap-timeline --full   # time-ordered review of the newest dump
 EOF
