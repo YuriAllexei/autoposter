@@ -24,6 +24,15 @@
       "enabled": true,
       "recording": ".local-capture/manual_session/facebook/20260919T001033Z_504281104001309",
       "$note": "Recording 20260919T001033Z: same Spanish composer layout as Cuauhtémoc (trigger 'Escribe algo...', modal 'Crea una publicación pública...'). Dry-run verification pending before live."
+    },
+    {
+      "name": "compra-venta autos chihuahua",
+      "group_url": "https://www.facebook.com/groups/3638068359565813/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T004310Z",
+      "$note": "Recording 20260919T004310Z: same Spanish composer layout (Escribe algo... -> Crea una publicación pública...). No photo/publish clicks captured yet; dry run is the verification gate."
     }
   ]
 }
