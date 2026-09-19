@@ -34,6 +34,28 @@ def test_scan_recordings_untagged_sessions_go_under_empty_key(tmp_path):
     assert "" in recs and "249803862915566" not in " ".join(recs)
 
 
+def test_scan_recordings_resolves_vanity_slug_url(tmp_path):
+    # vanity-slug recording: no numeric id anywhere in the summary; the dump's
+    # captured route-definitions response carries "groupID" next to the slug
+    d = _mk_capture(tmp_path, "20260919T024503Z",
+                    "https://www.facebook.com/groups/CarrosBaratoss/",
+                    "this group's layout")
+    body = ('{"definitions":{"https://www.facebook.com/groups/CarrosBaratoss/":'
+            '{"groupID":"277203682420532","meta":{"title":"CARROS EN VENTA '
+            'CHIHUAHUA"},"prefetchable":true}}}')
+    stray = '{"stories":[{"groupID":"999888777666555","name":"unrelated feed"}]}'
+    with (d / "manual_requests.jsonl").open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"record": "http_detail",
+                             "url": "https://www.facebook.com/ajax/bulk-route-definitions/",
+                             "response_body": body}) + "\n")
+        fh.write(json.dumps({"record": "http_detail", "url": "/feed",
+                             "response_body": stray}) + "\n")
+    recs = gi.scan_recordings(tmp_path)
+    assert "277203682420532" in recs
+    assert "999888777666555" not in recs  # unrelated ids must not leak
+    assert "" not in recs                 # no longer silently untagged
+
+
 def test_compute_status_stages(tmp_path):
     groups = [{
         "name": "G", "group_url": "https://www.facebook.com/groups/111",

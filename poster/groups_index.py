@@ -31,6 +31,47 @@ def group_ids_in_text(text: str) -> set[str]:
     return set(GROUP_ID_RE.findall(text or ""))
 
 
+VANITY_SLUG_RE = re.compile(r"facebook\.com/groups/([A-Za-z][A-Za-z0-9._-]{2,})/?")
+
+
+def resolve_vanity_group_id(url: str, dump_dir: Path) -> set[str]:
+    """Vanity-slug start URL (/groups/CarrosBaratoss/) -> numeric group id.
+
+    Some groups are only ever browsed by vanity URL, so the plain id regex
+    never fires and the recording would silently land in the untagged bucket.
+    The dump itself holds the proof: FB's captured route-definition responses
+    carry "groupID":"<digits>" in the same JSON as the slug route. Require
+    co-occurrence in a small window around the match so unrelated group ids
+    from feed data can't leak into the mapping.
+    """
+    m = VANITY_SLUG_RE.search(url or "")
+    if not m:
+        return set()
+    slug = m.group(1)
+    requests_file = dump_dir / "manual_requests.jsonl"
+    if not requests_file.exists():
+        return set()
+    hits: dict[str, int] = {}
+    try:
+        with requests_file.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if slug not in line:
+                    continue
+                try:
+                    body = json.loads(line).get("response_body") or ""
+                except json.JSONDecodeError:
+                    continue
+                body = json.dumps(body) if isinstance(body, dict) else str(body)
+                if slug not in body:
+                    continue
+                for g in re.finditer(r'"groupID":"(\d{8,16})"', body):
+                    if slug in body[max(0, g.start() - 3000):g.end()]:
+                        hits[g.group(1)] = hits.get(g.group(1), 0) + 1
+    except OSError:
+        return set()
+    return {max(hits, key=lambda k: hits[k])} if hits else set()
+
+
 def scan_recordings(capture_root: Path = CAPTURE_ROOT) -> dict[str, list[dict]]:
     """group_id -> recording summaries found on disk, newest first.
 
@@ -48,6 +89,8 @@ def scan_recordings(capture_root: Path = CAPTURE_ROOT) -> dict[str, list[dict]]:
             continue
         blob = " ".join(str(data.get(k, "")) for k in ("url", "purpose", "dir", "site"))
         ids = group_ids_in_text(blob)
+        if not ids:  # vanity-slug URL: resolve via the dump's own captured traffic
+            ids = resolve_vanity_group_id(str(data.get("url", "")), sj.parent)
         rec = {
             "dir": str(sj.parent.relative_to(capture_root.parent)),
             "ts": sj.parent.name,
