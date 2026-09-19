@@ -33,6 +33,15 @@
       "enabled": true,
       "recording": ".local-capture/manual_session/facebook/20260919T004310Z",
       "$note": "Recording 20260919T004310Z: same Spanish composer layout (Escribe algo... -> Crea una publicación pública...). No photo/publish clicks captured yet; dry run is the verification gate."
+    },
+    {
+      "name": "CARROS BARATOS EN CHIHUAHUA",
+      "group_url": "https://www.facebook.com/groups/198780741983035/",
+      "posting_code": "group_composer_es_v1",
+      "photos_order": "sorted",
+      "enabled": true,
+      "recording": ".local-capture/manual_session/facebook/20260919T014657Z",
+      "$note": "Recording 20260919T014657Z: same Spanish composer layout (trigger 'Escribe algo...' at 01:47:11, dialog closed via 'Cerrar el cuadro de diálogo del editor'). Layout-only capture — no photo upload or Publicar on the wire; dry run is the verification gate."
     }
   ]
 }
