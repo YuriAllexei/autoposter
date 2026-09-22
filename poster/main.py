@@ -202,12 +202,16 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
                 return 3
 
             ok = 0
-            for group in groups[: cfg.max_posts_per_run]:
+            planned = groups[: cfg.max_posts_per_run]
+            for idx, group in enumerate(planned):
                 group_ok, err = await run_group(page, group, post, cfg, log)
                 recorder.record(group, group_ok, err)
                 if group_ok:
                     ok += 1
-                await human_sleep(cfg, log, "next group")
+                if idx + 1 < len(planned):
+                    # only BETWEEN groups (uniform 2-4s); no idle sleep after
+                    # the last one — the browser closes anyway
+                    await human_sleep(cfg, log, "next group")
             log(f"done: {ok} group(s) processed of "
                 f"{min(len(groups), cfg.max_posts_per_run)} queued "
                 f"({'dry-run staged' if cfg.dry_run else 'published'})")
