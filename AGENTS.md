@@ -2,8 +2,10 @@
 
 Facebook group auto-posting bot (Playwright + persistent Firefox profile).
 Posts our car-inventory summary as the professional profile "Carmazon" into
-groups listed in `data/groups.json`. Per-group layouts come from human
-recordings via the `scraping_recorder` submodule; flows can differ per group.
+groups listed in `data/groups.json`. Flows come from human recordings via the
+`scraping_recorder` submodule but are keyed by composer LAYOUT, not by group:
+one flow serves every group with that layout (2026-09-22 diff of all
+recordings: all Spanish groups share one identical composer).
 
 ## Environment / commands
 
@@ -74,8 +76,9 @@ harmless; use `poetry run python -m pytest`, not PATH pytest).
    files sorted inside each car; upload one batch per car folder.
 3. OS file dialog: never let it open — `page.on("filechooser")` →
    `fc.set_files(...)`; fallback `set_input_files` on `input[type=file]`.
-4. `posting_code` in groups.json = NAME OF THAT GROUP'S FLOW FUNCTION
-   (`poster/flows.py::<code>(page, post)`). Unknown code = hard error, never guess.
+4. `posting_code` in groups.json = NAME OF THE FLOW FUNCTION FOR THAT GROUP'S
+   COMPOSER LAYOUT (`poster/flows.py::<code>(page, post)`); many groups may
+   share one code. Unknown code = hard error, never guess.
 5. Random `uniform(AP_DELAY_MIN, AP_DELAY_MAX)` sleep before every post /
    group / URL / page action; per-char typing jitter. USER RULE: waits must be
    short — 3-7s, and the loader hard-caps any config at 7s (never longer).
@@ -106,16 +109,20 @@ harmless; use `poetry run python -m pytest`, not PATH pytest).
 ap-record → implement → verify is tracked automatically (`poster/groups_index.py`,
 alias `ap-status` / `--status`): status is COMPUTED from three sources
 (dumps on disk, REGISTRY functions, per-machine `data/dryrun_ok.json` stamp
-written after a successful dry run), never hand-declared. When wiring a new
-group: add its entry to `data/groups.json` with a `posting_code` — until the
-flow function exists the index shows it as a GAP, so nothing can be forgotten
-between recording and implementation.
+written after a successful dry run), never hand-declared. Adding a new group
+whose composer layout ALREADY has a flow (the common case — e.g. any Spanish
+group uses `group_composer_es_v1`): just add the groups.json entry and run a
+dry run; NO recording needed. ap-record is only for an unseen layout
+(different language UI, rules/questions gate, or a dry run failing on proven
+selectors). An entry whose `posting_code` has no function shows as a GAP.
 
 ## Conventions
 
 - All knobs in `.env` (`AP_` prefix, see `.env.example`); `.env`,
   `.local-capture/**`, and `data/car_photos/**` images are gitignored.
 - Roadmap: photo recording → monitoring/Discord summary ✅ (done 2026-09-17:
-  poster/results.py + poster/notify.py) → more groups (record → new flow fn →
-  groups.json) → scheduler + delivery verification (parse my_pending_content
+  poster/results.py + poster/notify.py) → more groups ✅ flow collapsed
+  (2026-09-22: recordings proven identical → reuse `group_composer_es_v1`,
+  dry-run stamp is the only per-group gate) → scheduler + delivery
+  verification (parse my_pending_content
   so "published" can mean admin-approved).

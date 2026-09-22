@@ -1,7 +1,16 @@
-"""Posting flows — ONE function per group flavor, dispatched by posting_code.
+"""Posting flows — one function per composer LAYOUT, shared by all groups.
 
 groups.json::posting_code resolves through REGISTRY below. Unknown code =
 KeyError (hard error; the dispatcher never guesses a flow).
+
+Flows are keyed by the composer UI, NOT by group (diff of all recordings on
+2026-09-22): every Spanish group we have feeds the identical 'Escribe algo...'
+trigger, 'Crea una publicación pública...' modal and an identical
+GroupCometComposerToolbar payload (same sprouts + post_button_label
+'Publicar') — so one flow serves N groups. Record a new group ONLY when it
+looks like a different layout (non-Spanish UI, rules/questions gate, or a
+dry-run that fails to find the proven selectors); a reuse just needs a
+successful dry run (the ap-status stamp), not a recording.
 
 Repo rules obeyed by every flow:
   - random uniform(AP_DELAY_MIN, AP_DELAY_MAX) sleep before every sensitive
@@ -311,5 +320,6 @@ def get_flow(code: str):
     except KeyError:
         raise KeyError(
             f"unknown posting_code {code!r}; implemented flows: {sorted(REGISTRY)} — "
-            "record the group, add the function, never guess"
+            "reuse one of these if the composer layout matches, otherwise record "
+            "a new layout function; never guess"
         ) from None

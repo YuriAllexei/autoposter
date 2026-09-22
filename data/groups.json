@@ -1,8 +1,11 @@
 {
   "$comment": [
     "Target groups registry. ONE post per group per run.",
-    "posting_code = the name of the Python function implementing THAT group's flow",
-    "(poster/flows.py::<posting_code>). One function per group; unknown code = hard error, no guessing.",
+    "posting_code = NAME of the flow function implementing that group's composer layout",
+    "(poster/flows.py::<code>). Flows are keyed by LAYOUT, not by group: many groups share",
+    "one code (group_composer_es_v1 = Spanish composer). Unknown code = hard error, never",
+    "guess. A new group whose layout already has a flow needs only a successful dry run",
+    "(ap-status stamp) — record ONLY to build a flow for a new layout.",
     "photos_order: 'sorted' = car subfolders of data/car_photos in name order (NN_ prefixes).",
     "Optional 'recording': ap-record dump dir this flow was built from (auto-detected from .local-capture when omitted).",
     "Index of states is computed by `poetry run python -m poster.main --status` (alias: ap-status)."

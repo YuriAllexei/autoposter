@@ -5,14 +5,17 @@ entry gains:
   "recording": path of the ap-record dump this flow was built from (or null)
 
 Pipeline states (computed, not trusted from typing):
-  recorded          a dump exists on disk mentioning the group id
+  recorded          a dump exists on disk mentioning the group id (informational:
+                    flows are keyed by composer LAYOUT, so a group needs NO
+                    recording when its posting_code flow already exists)
   implemented       posting_code resolves to a real function in flows.REGISTRY
   dryrun_verified   a dry run SUCCEEDED and poster.main stamped data/dryrun_ok.json
   live              AP_DRY_RUN=false in .env (user's call)
 
 `render_report()` + gaps are what `poster.main --status` / `ap-status` prints:
-recordings nobody wired up, entries whose flow fn is missing, and
-implemented-but-never-dry-run — the "what's left" list.
+recordings nobody wired up, and entries whose posting_code has no function —
+the "what's left" list. The verification gate for a reused flow is the dry-run
+stamp; ap-record is only needed for a composer layout we have never coded.
 """
 from __future__ import annotations
 
@@ -147,7 +150,8 @@ def render_report(rows: list[dict], gaps: list[str], untagged: list[dict],
     for r in rows:
         ev = []
         ev.append(f"rec:{r['recording'].split('/')[-1][:28]}" if r["recording"]
-                  else "rec:NONE")
+                  else "rec:reused-layout (no recording needed)"
+                  if r["implemented"] else "rec:NONE")
         ev.append(f"code:{r['code']}" if r["implemented"]
                   else f"code:{r['code']} MISSING")
         ev.append(f"dryrun:{r['dryrun']['ts'][:19]}" if r["dryrun"]

@@ -83,6 +83,19 @@ def test_stamp_dryrun_ok_roundtrip(tmp_path):
     assert loaded["777"]["evidence"] == "/e2.png" and "888" in loaded
 
 
+def test_report_shows_reused_layout_when_no_recording_exists():
+    """Flows are keyed by composer layout: an implemented-but-unrecorded group
+    is a normal reuse (report must NOT render it as a missing recording)."""
+    groups = [{"name": "G2", "group_url": "https://www.facebook.com/groups/222",
+               "posting_code": "group_composer_es_v1", "enabled": True}]
+    rows = gi.compute_status(groups, {"group_composer_es_v1"}, {}, {})
+    assert rows[0]["recording"] is None
+    assert "dry-run pending" in rows[0]["stage"]  # gate is the stamp, not a recording
+    from types import SimpleNamespace
+    out = gi.render_report(rows, [], [], SimpleNamespace(dry_run=True))
+    assert "reused-layout" in out and "rec:NONE" not in out
+
+
 def test_groups_file_registry_consistency():
     """Every groups.json entry parses into the index without error, and the
     shipped repo state reports a gap until each recording is wired (smoke)."""
