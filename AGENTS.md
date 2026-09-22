@@ -79,9 +79,13 @@ harmless; use `poetry run python -m pytest`, not PATH pytest).
 4. `posting_code` in groups.json = NAME OF THE FLOW FUNCTION FOR THAT GROUP'S
    COMPOSER LAYOUT (`poster/flows.py::<code>(page, post)`); many groups may
    share one code. Unknown code = hard error, never guess.
-5. Random `uniform(AP_DELAY_MIN, AP_DELAY_MAX)` sleep before every post /
-   group / URL / page action; per-char typing jitter. USER RULE: waits must be
-   short — 3-7s, and the loader hard-caps any config at 7s (never longer).
+5. Random `uniform(AP_DELAY_MIN, AP_DELAY_MAX)` sleep before every group /
+   URL / publish action. USER RULE: waits must be short — 2-4s (2026-09-22;
+   the loader still hard-caps any config at 7s, never longer). Eliminated
+   2026-09-22: NO sleep between photo-batch attachments (settling is gated by
+   the `_wait_upload_settled` condition-wait) and post text is PASTED via
+   `execCommand('insertText')` (Enter per line) with the 1:1 read-back gate —
+   char-by-char keyboard.type survives only as one-shot fallback.
 6. DEV SAFETY: never post or comment unless the selector is proven against a
    recording/dry-run. `AP_DRY_RUN=true` is default and fail-safe.
 7. MONITORING: exactly ONE Discord summary per run, sent only after it ends

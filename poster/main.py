@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import random
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,7 +80,7 @@ async def verify_pending(page, group_url: str, cfg: Config, log) -> None:
     await human_sleep(cfg, log, "pending-content check")
     try:
         await page.goto(pending, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(8000)
+        await page.wait_for_timeout(random.uniform(2000, 4000))
         shot = await dump_evidence(page, cfg.screenshot_dir, "pending_content")
         log(f"verify: pending-content page captured -> {shot}")
     except Exception as e:

@@ -14,8 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
-# User rule (2026-09-17): random delays live between 3-7s; NOTHING may wait
-# longer than this cap, even if .env asks for more.
+# User rule (2026-09-22): random delays live between 2-4s (was 3-7s); NOTHING
+# may wait longer than this cap, even if .env asks for more.
 MAX_ALLOWED_DELAY = 7.0
 
 

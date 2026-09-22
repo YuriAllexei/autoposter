@@ -13,9 +13,14 @@ dry-run that fails to find the proven selectors); a reuse just needs a
 successful dry run (the ap-status stamp), not a recording.
 
 Repo rules obeyed by every flow:
-  - random uniform(AP_DELAY_MIN, AP_DELAY_MAX) sleep before every sensitive
-    action (per photo batch, before publish)
-  - post text inserted 1:1 with READ-BACK verification (rule 3)
+  - random uniform(AP_DELAY_MIN, AP_DELAY_MAX) sleep before the sensitive
+    publish step. There is NO sleep per photo batch: photos attach as fast as
+    possible, and upload settling is gated by the condition-wait
+    _wait_upload_settled, not by a timer
+  - post text inserted 1:1 with READ-BACK verification (rule 3): pasted at
+    paste-speed (document.execCommand('insertText') per line + Enter between
+    lines, so newlines survive) instead of char-by-char keyboard.type — then
+    read back, with ONE keyboard.type fallback; a second mismatch = FlowError
   - photos attached via the composer's hidden input[type=file] (proven in
     recording 20260917T063422Z: `input.x1s85apg` logged `C:\\fakepath\\car.jpg`)
     — Playwright set_input_files answers it in-process; the OS dialog is
@@ -101,21 +106,41 @@ async def human_sleep(cfg: Config, log: log_fn, why: str = "") -> None:
 
 
 async def _ensure_text_1to1(page: Page, box, text: str, cfg: Config, log: log_fn) -> None:
-    """Content fidelity gate (rule 3): keyboard.type at human delay (proven
-    dryrun_post.py path) — then READ BACK; mismatch = FlowError, we never
-    publish wrong text.
+    """Content fidelity gate (rule 3), paste-speed path.
+
+    `document.execCommand('insertText', false, line)` is a paste-like insertion
+    that fires the input events FB's React composer listens to (same as a real
+    Ctrl+V); an Enter keypress per line break keeps newlines 1:1. That is
+    orders of magnitude faster than keyboard.type on a long post. The READ-BACK
+    comparison below is still the hard gate: whatever path put the text in, if
+    inner_text() doesn't match we fall back ONCE to char-by-char typing (whole
+    post, human jitter) and re-read; still mismatched = FlowError, we never
+    publish text that failed read-back.
     """
     await box.click()
-    await page.keyboard.type(text, delay=random.randint(cfg.type_delay_min_ms,
-                                                        cfg.type_delay_max_ms))
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if i:
+            await page.keyboard.press("Enter")     # composer line break, 1:1
+        if line:
+            await page.evaluate(
+                "(t) => document.execCommand('insertText', false, t)", line)
     await page.wait_for_timeout(800)
     got = (await box.inner_text()).strip()
     if got != text.strip():
-        raise FlowError(
-            f"composer text mismatch after typing ({len(got)} chars vs "
-            f"{len(text)}) — refusing to continue"
-        )
-    log(f"text typed 1:1 ({len(text)} chars, read-back verified)")
+        log(f"paste read-back mismatch ({len(got)} chars vs {len(text)}) — "
+            f"falling back to keyboard.type once")
+        await box.click()
+        await page.keyboard.type(text, delay=random.randint(cfg.type_delay_min_ms,
+                                                           cfg.type_delay_max_ms))
+        await page.wait_for_timeout(800)
+        got = (await box.inner_text()).strip()
+        if got != text.strip():
+            raise FlowError(
+                f"composer text mismatch after typing ({len(got)} chars vs "
+                f"{len(text)}) — refusing to continue"
+            )
+    log(f"text pasted 1:1 ({len(text)} chars, read-back verified)")
 
 
 # ---- the photo attach (rule 9 solution) --------------------------------------
@@ -130,7 +155,6 @@ async def attach_car_photos(page: Page, post: Post, cfg: Config, log: log_fn) ->
         if not car.files:
             continue
         paths = [str(f) for f in car.files]
-        await human_sleep(cfg, log, f"attaching photos for {car.name}")
 
         # (A) [proven] hidden image input inside the composer dialog
         inputs = page.locator('div[role="dialog"] input[type="file"]')
