@@ -1,5 +1,4 @@
 """Unit tests for the poster package (no browser): config, ordering, dispatch."""
-import json
 import sys
 from pathlib import Path
 
@@ -7,7 +6,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from poster import flows
 from poster.config import load_config
 from poster.photos import collect_photos
 
@@ -120,22 +118,6 @@ def test_nested_folders_are_not_merged(tmp_path):
 
 def test_collect_photos_empty_dir_is_ok(tmp_path):
     assert collect_photos(tmp_path / "nothing", [".jpg"], max_photos=10) == []
-
-
-def test_dispatcher_unknown_code_hard_errors():
-    with pytest.raises(KeyError):
-        flows.get_flow("definitely_not_a_flow")
-
-
-def test_dispatcher_resolves_real_flow():
-    fn = flows.get_flow("group_composer_es_v1")
-    assert callable(fn) and fn.__name__ == "group_composer_es_v1"
-
-
-def test_flow_registry_covers_groups_file():
-    groups = json.loads((REPO / "data/groups.json").read_text(encoding="utf-8"))
-    for g in groups["groups"]:
-        assert g["posting_code"] in flows.REGISTRY, g["posting_code"]
 
 
 def test_monitoring_config_fields(tmp_path, monkeypatch):

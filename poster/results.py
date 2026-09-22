@@ -5,6 +5,9 @@ One line per group attempt. Statuses:
   staged     dry-run: composer was fully staged then closed — NOT a real post,
              therefore never counted in the all-time totals
   failed     flow/runner error, evidence saved under AP_SCREENSHOT_DIR
+  skipped    group entered the run but the composer trigger never rendered
+             (5s gate, user rule 2026-09-22) — posting not enabled there for
+             our identity; not a failure and never counted as published
 """
 from __future__ import annotations
 
@@ -17,6 +20,25 @@ from pathlib import Path
 STATUS_PUBLISHED = "published"
 STATUS_STAGED = "staged"
 STATUS_FAILED = "failed"
+STATUS_SKIPPED = "skipped"
+
+
+def last_attempt_ts(ledger_path: Path) -> dict[str, str]:
+    """Latest ledger ts per group_id over ALL statuses — the rotation clock
+    for picking which joined groups to post next (never-attempted first)."""
+    last: dict[str, str] = {}
+    if not ledger_path.exists():
+        return last
+    for raw in ledger_path.read_text(encoding="utf-8").splitlines():
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        gid = str(rec.get("group_id") or "")
+        ts = str(rec.get("ts") or "")
+        if gid and (ts >= last.get(gid, "")):
+            last[gid] = ts
+    return last
 
 
 def group_id_from_url(url: str) -> str:
@@ -65,8 +87,21 @@ class RunRecorder:
             status = STATUS_FAILED
         res = GroupResult(
             name=str(group.get("name") or group.get("group_url") or "?"),
-            group_id=group_id_from_url(str(group.get("group_url", ""))),
+            group_id=group_id_from_url(str(group.get("group_url", "") or
+                                            group.get("url", ""))),
             status=status, error=error)
+        self.results.append(res)
+        self._append_ledger(res)
+        return res
+
+    def record_skipped(self, group: dict, reason: str) -> GroupResult:
+        """Composer never rendered (5s gate): group is not postable for this
+        identity. Recorded for rotation, never counted as published."""
+        res = GroupResult(
+            name=str(group.get("name") or group.get("url") or "?"),
+            group_id=str(group.get("id") or
+                         group_id_from_url(str(group.get("group_url", "")))),
+            status=STATUS_SKIPPED, error=reason)
         self.results.append(res)
         self._append_ledger(res)
         return res
@@ -94,6 +129,7 @@ class RunRecorder:
             "published": sum(1 for r in self.results if r.status == STATUS_PUBLISHED),
             "staged": sum(1 for r in self.results if r.status == STATUS_STAGED),
             "failed": sum(1 for r in self.results if r.status == STATUS_FAILED),
+            "skipped": sum(1 for r in self.results if r.status == STATUS_SKIPPED),
             "attempted": len(self.results),
             "groups": [vars(r) for r in self.results],
             "totals_published_all_time": totals,

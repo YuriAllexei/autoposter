@@ -21,6 +21,7 @@ import asyncio
 import json
 import re
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -55,21 +56,28 @@ OPEN_ACCOUNT_MENU_JS = r"""
 CLICK_PROFILE_ITEM_JS = r"""
 ((want) => {
   document.querySelectorAll('[data-ap-switch]').forEach(e => e.removeAttribute('data-ap-switch'));
+  const norm = t => (t || '').replace(/\s+/g, ' ').trim();
   const els = Array.from(
     document.querySelectorAll('[role="menuitem"], [role="button"], span, div')
   ).filter(el => {
-    const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
     const r = el.getBoundingClientRect();
-    return r.width > 0 && t && t.length < 200 && t.includes(want);
+    return r.width > 0 && norm(el.innerText) && norm(el.innerText).length < 200
+      && norm(el.innerText).includes(want);
   });
   if (!els.length) return 'no-profile-item';
+  // "Carmazon" is a substring of "Carmazon Alex" (both rows in the switcher
+  // [recording 20260922T210535Z]) — prefer elements whose text is EXACTLY the
+  // wanted identity, so we never stamp the wrong row.
+  const exact = els.filter(el => norm(el.innerText) === want);
+  const pool = exact.length ? exact : els;
   // smallest containing clickable row = the LAST match (most specific/innermost is too
   // small); FB wants the row-level node with a React handler:
-  const inner = els[els.length - 1];
+  const inner = pool[pool.length - 1];
   const row = inner.closest('[role="menuitem"],[role="button"],[role="listitem"]') || inner;
   row.setAttribute('data-ap-switch', '1');
   const r = row.getBoundingClientRect();
-  return 'stamped:' + row.tagName.toLowerCase() + ':' + row.getAttribute('role')
+  return 'stamped:' + (exact.length ? 'exact' : 'contains') + ':'
+    + row.tagName.toLowerCase() + ':' + row.getAttribute('role')
     + ':' + Math.round(r.x + r.width / 2) + ',' + Math.round(r.y + r.height / 2);
 })("%NAME%")
 """
@@ -104,6 +112,77 @@ async def is_authed(ctx: BrowserContext) -> bool:
     return bool((await cookie_map(ctx)).get("c_user"))
 
 
+async def current_identity(ctx: BrowserContext, page: Page) -> str | None:
+    """The acting identity = the `av` (actor viewer) param FB puts on every
+    /api/graphql/ request [proven: recording 20260922T210535Z, all 554
+    requests carry it; the professional PROFILE switch never sets an i_user
+    cookie, so cookies alone cannot tell the identities apart].
+    Captured by watching requests; falls back to the page HTML if we have
+    not seen a graphql call yet on this page."""
+    url = getattr(page, "_ap_av_url", None)
+    if not url:
+        try:
+            html = await page.content()
+        except Exception:
+            return None
+        m = re.search(r'"av":"?(\d{6,})', html)
+        return m.group(1) if m else None
+    m = re.search(r"[?&]av=(\d{6,})", url)
+    return m.group(1) if m else None
+
+
+async def _track_av(page: Page) -> None:
+    """Attach once-per-page listener stashing the latest graphql av=.
+    (playwright's sync check in identity code paths is the cookie-less
+    truth; this just feeds it)."""
+    if getattr(page, "_ap_av_hooked", False):
+        return
+
+    def on_request(req) -> None:
+        if "/api/graphql" in req.url and "av=" in req.url:
+            page._ap_av_url = req.url  # type: ignore[attr-defined]
+
+    page.on("request", on_request)
+    page._ap_av_hooked = True  # type: ignore[attr-defined]
+
+
+async def get_av(ctx: BrowserContext, page: Page) -> str | None:
+    await _track_av(page)
+    if not getattr(page, "_ap_av_url", None):
+        # give in-flight feed requests a moment, then sample
+        try:
+            await page.wait_for_timeout(2000)
+        except Exception:
+            return None
+    return await current_identity(ctx, page)
+
+
+def identity_ok(cookies: Mapping[str, str], *, post_as: str,
+                posting_user_id: str, main_user_id: str,
+                av: str | None = None) -> bool:
+    """Pure predicate for 'are we the right identity to post?'.
+
+    av = the acting id from /api/graphql (authoritative, proven recording
+    20260922T210535Z: av flips 61592323007979(page) <-> 61592579496197(personal)
+    on each switch; the professional profile never sets i_user). When av is
+    unknown we fall back to cookies: page mode still works via i_user;
+    profile mode is only satisfied by c_user==main AND no i_user.
+    Empty ids never pass (fail-safe).
+    """
+    if av:  # authoritative when seen
+        want = main_user_id if post_as == "profile" else posting_user_id
+        return bool(want) and av == want
+    if post_as == "profile":
+        if not main_user_id:
+            return False
+        iu = cookies.get("i_user")
+        return (cookies.get("c_user") == main_user_id
+                and (iu is None or iu == "" or iu == main_user_id))
+    if not posting_user_id:
+        return False
+    return cookies.get("i_user") == posting_user_id
+
+
 async def ensure_login(ctx: BrowserContext, page: Page, log, login_timeout: int = 900) -> bool:
     """Watches for a manual login in the headed window; NEVER types credentials."""
     deadline = time.time() + login_timeout
@@ -131,20 +210,49 @@ async def ensure_login(ctx: BrowserContext, page: Page, log, login_timeout: int 
 
 
 async def ensure_active_profile(
-    ctx: BrowserContext, page: Page, *, posting_user_id: str, posting_name: str, log
+    ctx: BrowserContext, page: Page, *, post_as: str, posting_user_id: str,
+    main_user_id: str, posting_name: str, main_profile_name: str = "", log=None
 ) -> bool:
-    """[proven] Switch personal account -> professional posting profile via the
-    account menu. JS .click() and raw mouse.click() both fail (untrusted / no
-    auto-scroll); only Playwright locator.click() on the stamped row works.
+    """[proven] Make the configured posting identity active via the account
+    menu, for either mode: 'page' (row = posting_name, e.g. 'Carmazon') or
+    'profile' (row = main_profile_name, e.g. 'Carmazon Alex'; recording
+    20260922T210535Z). The SWITCHER LISTS BOTH ROWS in either state, and
+    'Carmazon' is a substring of 'Carmazon Alex' — CLICK_PROFILE_ITEM_JS
+    prefers exact-text rows. Same caveat both directions: JS .click() and
+    raw mouse.click() fail (untrusted / no auto-scroll); only Playwright
+    locator.click() on the stamped row works. Identity is verified by the
+    `av` graphql param (authoritative; the professional profile never sets
+    i_user), falling back to cookies before the first request is seen.
     After 6 automated attempts it stops clicking and waits for a manual switch.
     """
-    if not posting_user_id:
-        log(f"AP_FB_POSTING_USER not set — skipping auto-switch; ensure the active "
-            f"profile is {posting_name!r} manually before going live")
-    if (await cookie_map(ctx)).get("i_user") == posting_user_id:
-        log(f"active profile already correct (i_user={posting_user_id})")
+    if log is None:
+        def log(msg: str, _p=print) -> None:
+            _p(msg)
+    row_name = main_profile_name if post_as == "profile" else posting_name
+    if post_as == "profile" and not row_name:
+        log("AP_POST_AS=profile but AP_FB_MAIN_PROFILE_NAME is empty — the "
+            "account-menu row for the personal profile is unknown; abort "
+            "(fail-safe, nothing posted)")
+        return False
+    need = main_user_id if post_as == "profile" else posting_user_id
+    if not need:
+        log(f"AP_POST_AS={post_as!r} but the id it needs "
+            f"({'AP_FB_MAIN_USER' if post_as == 'profile' else 'AP_FB_POSTING_USER'})"
+            " is empty — cannot verify identity; abort (fail-safe, nothing posted)")
+        return False
+    await _track_av(page)
+
+    async def on_target() -> bool:
+        return identity_ok(await cookie_map(ctx), post_as=post_as,
+                           posting_user_id=posting_user_id,
+                           main_user_id=main_user_id,
+                           av=await get_av(ctx, page))
+
+    if await on_target():
+        log(f"active identity already correct: {row_name!r} "
+            f"(post_as={post_as}, av={await get_av(ctx, page) or 'cookie-fallback'})")
         return True
-    log(f"switching active profile to {posting_name!r} ...")
+    log(f"switching active identity to {row_name!r} (post_as={post_as}) ...")
     try:
         if "facebook.com" not in page.url:
             await page.goto("https://www.facebook.com/", timeout=60000)
@@ -155,7 +263,7 @@ async def ensure_active_profile(
     async def try_switch() -> str:
         r1 = await page.evaluate(OPEN_ACCOUNT_MENU_JS)
         await page.wait_for_timeout(2000)
-        r2 = await page.evaluate(click_profile_item_js(posting_name))
+        r2 = await page.evaluate(click_profile_item_js(row_name))
         if r2.startswith("stamped:"):
             try:
                 await page.locator('[data-ap-switch="1"]').first.click(timeout=5000)
@@ -165,7 +273,7 @@ async def ensure_active_profile(
         return f"{r1} -> {r2}"
 
     async def try_row_only() -> str:
-        r2 = await page.evaluate(click_profile_item_js(posting_name))
+        r2 = await page.evaluate(click_profile_item_js(row_name))
         if r2.startswith("stamped:"):
             try:
                 await page.locator('[data-ap-switch="1"]').first.click(timeout=5000)
@@ -179,31 +287,32 @@ async def ensure_active_profile(
     deadline = time.time() + 600
     while not switched and time.time() < deadline:
         await page.wait_for_timeout(5000)
-        if (await cookie_map(ctx)).get("i_user") == posting_user_id:
+        if await on_target():
             switched = True
             break
         if attempts < 6:
             attempts += 1
             try:
-                if not await page.evaluate(menu_open_js(posting_name)):
+                if not await page.evaluate(menu_open_js(row_name)):
                     log(f"switch try {attempts}: {await try_switch()}")
                 else:
                     log(f"switch row (menu open): {await try_row_only()}")
             except Exception as e:
                 log(f"switch err: {type(e).__name__}")
         await page.wait_for_timeout(5000)
-        if (await cookie_map(ctx)).get("i_user") == posting_user_id:
+        if await on_target():
             switched = True
             break
     if not switched:
-        log(f"STILL not {posting_name!r} after automated attempts — waiting up to "
+        log(f"STILL not {row_name!r} after automated attempts — waiting up to "
             "10 min for a MANUAL switch in the open window ...")
         end = time.time() + 600
         while time.time() < end and not switched:
             await asyncio.sleep(3)
-            switched = (await cookie_map(ctx)).get("i_user") == posting_user_id
+            switched = await on_target()
     if switched:
-        log(f"active profile = {posting_name} (i_user={posting_user_id})")
+        log(f"active identity = {row_name} (post_as={post_as}, "
+            f"av={await get_av(ctx, page)})")
     return switched
 
 

@@ -91,7 +91,6 @@ class Config:
     post_as: str = "page"
     fb_lang: str = "es"
 
-    groups_file: Path = field(default=Path("data/groups.json"))
     post_text_file: Path = field(default=Path("data/post.txt"))
     photos_dir: Path = field(default=Path("data/car_photos"))
     photo_extensions: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".webp")
@@ -154,7 +153,6 @@ def load_config(env_file: Path | None = None) -> Config:
         fb_main_profile_name=(get("AP_FB_MAIN_PROFILE_NAME") or "").strip(),
         post_as=(get("AP_POST_AS") or "page").strip().lower(),
         fb_lang=(get("AP_FB_LANG") or "es").strip().lower(),
-        groups_file=_as_path(get("AP_GROUPS_FILE"), "data/groups.json"),
         post_text_file=_as_path(get("AP_POST_TEXT_FILE"), "data/post.txt"),
         photos_dir=_as_path(get("AP_PHOTOS_DIR"), "data/car_photos"),
         photo_extensions=tuple(

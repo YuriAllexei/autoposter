@@ -1,16 +1,14 @@
 """Posting flows — one function per composer LAYOUT, shared by all groups.
 
-groups.json::posting_code resolves through REGISTRY below. Unknown code =
-KeyError (hard error; the dispatcher never guesses a flow).
-
 Flows are keyed by the composer UI, NOT by group (diff of all recordings on
 2026-09-22): every Spanish group we have feeds the identical 'Escribe algo...'
 trigger, 'Crea una publicación pública...' modal and an identical
 GroupCometComposerToolbar payload (same sprouts + post_button_label
-'Publicar') — so one flow serves N groups. Record a new group ONLY when it
-looks like a different layout (non-Spanish UI, rules/questions gate, or a
-dry-run that fails to find the proven selectors); a reuse just needs a
-successful dry run (the ap-status stamp), not a recording.
+'Publicar') — so one flow serves N groups. Since the dynamic-targets change
+(main.py), runs post to LIVE-joined groups with group_composer_es_v1; the
+SOLE per-group gate is that the trigger renders within 5s (composer_gate).
+A group whose layout ever differs (non-Spanish UI, rules/questions gate)
+would need a new layout function + dispatch — record it first, never guess.
 
 Repo rules obeyed by every flow:
   - random uniform(AP_DELAY_MIN, AP_DELAY_MAX) sleep before the sensitive
@@ -37,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from playwright.async_api import Page
@@ -98,9 +96,13 @@ PUBLISH_RE = re.compile(r"^(Publicar|Post|Publish)$", re.IGNORECASE)
 PHOTO_LABEL_RE = re.compile(r"Fotograf[ií]a|Foto|Photo|Imagen|Image", re.IGNORECASE)
 
 
-async def human_sleep(cfg: Config, log: log_fn, why: str = "") -> None:
-    """[rule 6] uniform(min,max) seconds before any sensitive action."""
-    s = random.uniform(cfg.delay_min, cfg.delay_max)
+async def human_sleep(cfg: Config, log: log_fn, why: str = "",
+                      lo: float | None = None, hi: float | None = None
+                      ) -> None:
+    """[rule 6] uniform(min,max) seconds before any sensitive action.
+    lo/hi override the general range (used for the 10-15s group switch)."""
+    s = random.uniform(cfg.delay_min if lo is None else lo,
+                       cfg.delay_max if hi is None else hi)
     log(f"sleep {s:.1f}s before {why or 'action'}")
     await asyncio.sleep(s)
 
@@ -332,18 +334,7 @@ async def group_composer_es_v1(
 
 
 # ---- registry / dispatcher ----------------------------------------------------
+# (groups.json era is over: targets are live-joined groups and every Spanish
+#  group composer is identical — main.run_group calls group_composer_es_v1
+#  directly. See poster/groups_fetch.py + AGENTS.md.)
 
-REGISTRY: dict[str, Callable[..., Awaitable[dict]]] = {
-    "group_composer_es_v1": group_composer_es_v1,
-}
-
-
-def get_flow(code: str):
-    try:
-        return REGISTRY[code]
-    except KeyError:
-        raise KeyError(
-            f"unknown posting_code {code!r}; implemented flows: {sorted(REGISTRY)} — "
-            "reuse one of these if the composer layout matches, otherwise record "
-            "a new layout function; never guess"
-        ) from None

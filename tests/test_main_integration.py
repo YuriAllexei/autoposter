@@ -1,5 +1,7 @@
 """Integration: poster.main records every attempt to the ledger and sends
 EXACTLY ONE Discord summary per finished run (incl. aborts and crashes).
+Dynamic-targets era: joined groups come from groups_fetch (stubbed), the
+loop selects them via select_targets + ledger rotation.
 
 No browser, no network: playwright launch is stubbed, main.py's
 collaborators (login/profile/flow/verify/sleep/evidence) are monkeypatched,
@@ -19,12 +21,18 @@ sys.path.insert(0, str(REPO))
 
 pytest.importorskip("playwright")  # main.py imports it at module level
 
+from poster import groups_fetch, notify
 from poster import main as m
-from poster import notify
 from poster.config import Config
 
-GROUP = {"name": "TEST GROUP", "group_url": "https://www.facebook.com/groups/42",
-         "posting_code": "group_composer_es_v1", "enabled": True}
+JOINED = [
+    {"id": "42", "name": "TEST GROUP",
+     "url": "https://www.facebook.com/groups/42"},
+]
+JOINED2 = JOINED + [
+    {"id": "43", "name": "TEST GROUP B",
+     "url": "https://www.facebook.com/groups/43"},
+]
 
 
 class FakePage:
@@ -77,7 +85,6 @@ def _cfg(tmp_path, *, dry=False):
     return Config(
         dry_run=dry, profile_dir=tmp_path / "profile",
         screenshot_dir=tmp_path / "shots", log_dir=tmp_path / "logs",
-        groups_file=tmp_path / "groups.json",
         post_text_file=tmp_path / "post.txt",
         photos_dir=tmp_path / "photos",
         ledger_file=tmp_path / "results" / "ledger.jsonl",
@@ -85,10 +92,8 @@ def _cfg(tmp_path, *, dry=False):
         max_posts_per_run=5, fb_posting_profile_name="TestProfile")
 
 
-def _make_harness(tmp_path, monkeypatch, *, dry=False):
+def _make_harness(tmp_path, monkeypatch, *, dry=False, joined=None):
     cfg = _cfg(tmp_path, dry=dry)
-    (tmp_path / "groups.json").write_text(
-        json.dumps({"groups": [GROUP]}), encoding="utf-8")
     (tmp_path / "post.txt").write_text("hello", encoding="utf-8")
     posts = []
 
@@ -100,17 +105,20 @@ def _make_harness(tmp_path, monkeypatch, *, dry=False):
     monkeypatch.setattr(notify.time, "sleep", lambda s: None)
     monkeypatch.setattr(m, "async_playwright", _fake_pw)
 
+    async def fake_fetch(page, *, av, log=None, max_pages=25):
+        return list(joined if joined is not None else JOINED)
+
+    monkeypatch.setattr(groups_fetch, "fetch_joined_groups", fake_fetch)
+
     async def ok_login(ctx, page, log, login_timeout=900):
         return True
 
-    async def ok_profile(ctx, page, *, posting_user_id, posting_name, log):
+    async def ok_profile(ctx, page, *, post_as, posting_user_id,
+                         main_user_id, posting_name, main_profile_name="", log=None):
         return True
 
-    async def no_sleep(cfg_, log, why=""):
+    async def no_sleep(cfg_, log, why="", *args, **kwargs):
         return None
-
-    async def ok_ready(page, timeout_s=45):
-        return True
 
     async def no_verify(page, url, cfg_, log):
         return None
@@ -122,7 +130,6 @@ def _make_harness(tmp_path, monkeypatch, *, dry=False):
     monkeypatch.setattr(m, "ensure_active_profile", ok_profile)
     monkeypatch.setattr(m, "verify_pending", no_verify)
     monkeypatch.setattr(m, "human_sleep", no_sleep)
-    monkeypatch.setattr(m, "wait_group_ready", ok_ready)
     monkeypatch.setattr(m, "dump_evidence", no_evidence)
 
     def install_run_group(result):
@@ -152,7 +159,7 @@ def _install_boom(monkeypatch):
 
 def test_live_run_records_published_and_notifies_once(tmp_path, monkeypatch):
     cfg, posts, install = _make_harness(tmp_path, monkeypatch)
-    install((True, None))
+    install(("posted", None))
     rc = asyncio.run(m.main_async(cfg, None))
     assert rc == 0
     line, = _ledger_lines(cfg)
@@ -168,7 +175,7 @@ def test_live_run_records_published_and_notifies_once(tmp_path, monkeypatch):
 
 def test_dry_run_stages_never_counts_published(tmp_path, monkeypatch):
     cfg, posts, install = _make_harness(tmp_path, monkeypatch, dry=True)
-    install((True, None))
+    install(("posted", None))
     rc = asyncio.run(m.main_async(cfg, None))
     assert rc == 0
     line, = _ledger_lines(cfg)
@@ -182,7 +189,7 @@ def test_dry_run_stages_never_counts_published(tmp_path, monkeypatch):
 
 def test_two_runs_accumulate_published_counter(tmp_path, monkeypatch):
     cfg, posts, install = _make_harness(tmp_path, monkeypatch)
-    install((True, None))
+    install(("posted", None))
     asyncio.run(m.main_async(cfg, None))
     asyncio.run(m.main_async(cfg, None))
     assert len(posts) == 2
@@ -191,7 +198,7 @@ def test_two_runs_accumulate_published_counter(tmp_path, monkeypatch):
 
 def test_failed_group_records_error_rc1_and_notifies(tmp_path, monkeypatch):
     cfg, posts, install = _make_harness(tmp_path, monkeypatch)
-    install((False, "flow_error: x"))
+    install(("failed", "flow_error: x"))
     rc = asyncio.run(m.main_async(cfg, None))
     assert rc == 1
     line, = _ledger_lines(cfg)
@@ -199,6 +206,36 @@ def test_failed_group_records_error_rc1_and_notifies(tmp_path, monkeypatch):
     assert len(posts) == 1
     assert posts[0]["embeds"][0]["color"] == notify.COLOR_BAD
     assert "❌ TEST GROUP" in _desc(posts[0]) and "flow_error: x" in _desc(posts[0])
+
+
+def test_rotation_prefers_never_attempted_group(tmp_path, monkeypatch):
+    cfg, _, _ = _make_harness(tmp_path, monkeypatch, joined=JOINED2)
+    cfg.max_posts_per_run = 1
+    # seed: group 42 already published earlier today; 43 never attempted
+    cfg.ledger_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg.ledger_file.write_text(json.dumps(
+        {"group_id": "42", "name": "TEST GROUP", "status": "published",
+         "ts": "2026-09-21T10:00:00+00:00"}) + "\n", encoding="utf-8")
+    seen = []
+
+    async def spy_run_group(page, group, post, cfg_, log):
+        seen.append(group["id"])
+        return "posted", None
+    monkeypatch.setattr(m, "run_group", spy_run_group)
+    rc = asyncio.run(m.main_async(cfg, None))
+    assert rc == 0
+    assert seen == ["43"]  # the NEVER-attempted group, not the fresher 42
+
+
+def test_skip_records_skipped_and_notifies(tmp_path, monkeypatch):
+    cfg, posts, install = _make_harness(tmp_path, monkeypatch)
+    install(("skipped", "no composer within 5s (not enabled for identity)"))
+    rc = asyncio.run(m.main_async(cfg, None))
+    assert rc == 1  # nothing posted => run reports failure code
+    line, = _ledger_lines(cfg)
+    assert line["status"] == "skipped" and line["group_id"] == "42"
+    assert len(posts) == 1
+    assert "⏭️ TEST GROUP" in _desc(posts[0])
 
 
 def test_login_abort_notifies_with_reason(tmp_path, monkeypatch):
@@ -216,7 +253,9 @@ def test_login_abort_notifies_with_reason(tmp_path, monkeypatch):
 def test_profile_abort_notifies_with_reason(tmp_path, monkeypatch):
     cfg, posts, _ = _make_harness(tmp_path, monkeypatch)
 
-    async def bad_profile(ctx, page, *, posting_user_id, posting_name, log):
+    async def bad_profile(ctx, page, *, post_as, posting_user_id,
+                          main_user_id, posting_name, main_profile_name="",
+                          log=None):
         return False
     monkeypatch.setattr(m, "ensure_active_profile", bad_profile)
     rc = asyncio.run(m.main_async(cfg, None))
@@ -244,7 +283,7 @@ def test_crash_still_notifies_once_and_reraises(tmp_path, monkeypatch):
 def test_empty_webhook_sends_no_http_but_ledger_writes(tmp_path, monkeypatch):
     cfg, posts, install = _make_harness(tmp_path, monkeypatch)
     cfg.discord_webhook_url = ""
-    install((True, None))
+    install(("posted", None))
     rc = asyncio.run(m.main_async(cfg, None))
     assert rc == 0
     assert posts == []  # no network
@@ -257,7 +296,7 @@ def test_dead_webhook_never_changes_rc(tmp_path, monkeypatch):
     def explode(req, timeout=None):
         raise OSError("no network")
     monkeypatch.setattr(notify.urllib.request, "urlopen", explode)
-    install((True, None))
+    install(("posted", None))
     rc = asyncio.run(m.main_async(cfg, None))
     assert rc == 0  # monitoring failure must not affect the run
     assert posts == []
@@ -265,7 +304,7 @@ def test_dead_webhook_never_changes_rc(tmp_path, monkeypatch):
 
 def test_finish_latch_sends_once_even_if_called_twice(tmp_path, monkeypatch):
     cfg, posts, install = _make_harness(tmp_path, monkeypatch)
-    install((True, None))
+    install(("posted", None))
     rec = m.RunRecorder(ledger_path=cfg.ledger_file, run_id="L", dry_run=False)
     finish = m.make_finish(cfg, rec)
     finish(None, print)

@@ -35,6 +35,8 @@ def build_payload(summary: dict, profile_name: str = "") -> dict:
         name = str(g["name"])[:80]
         if g["status"] == "failed":
             lines.append(f"❌ {name} — `{str(g.get('error') or '')[:120]}`")
+        elif g["status"] == "skipped":
+            lines.append(f"⏭️ {name} — no composer (not postable for us)")
         elif dry:
             lines.append(f"🧪 {name} — composer staged, NOT published")
         else:
@@ -121,7 +123,7 @@ def _cli() -> int:
                 "groups": [{"name": "webhook test", "group_id": "0",
                             "status": "staged", "error": None}],
                 "totals_published_all_time": {}}
-        payload = build_payload(fake, cfg.fb_posting_profile_name)
+        payload = build_payload(fake, cfg.identity_label)
         return 0 if send_summary(cfg.discord_webhook_url, payload) else 1
     ap.print_help()
     return 2

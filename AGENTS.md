@@ -1,10 +1,12 @@
 # autoposter — Agent Guide
 
 Facebook group auto-posting bot (Playwright + persistent Firefox profile).
-Posts our car-inventory summary as the professional profile "Carmazon" into
-groups listed in `data/groups.json`. Flows come from human recordings via the
-`scraping_recorder` submodule but are keyed by composer LAYOUT, not by group:
-one flow serves every group with that layout (2026-09-22 diff of all
+Posts our car-inventory summary as the configured identity (personal profile
+"Carmazon Alex" or page "Carmazon") into every group the identity has
+joined — the target list is FETCHED LIVE each run (poster/groups_fetch.py),
+not a hand-kept file. Flows come from human recordings via the
+`scraping_recorder` submodule but are keyed by composer LAYOUT, not by
+group: one flow serves every group with that layout (2026-09-22 diff of all
 recordings: all Spanish groups share one identical composer).
 
 ## Environment / commands
@@ -35,15 +37,19 @@ poetry run python scripts/dump_header.py   # header buttons for selector work
 # screenshots/html/json under .local-capture/shots/:
 poetry run python -m poster.main                # respects AP_DRY_RUN in .env
 poetry run python -m poster.main --dry-run      # force dry run
-poetry run python -m poster.main --group 249803862915566
+poetry run python -m poster.main --group 249803862915566   # only this joined group
 # --live only works when .env already has AP_DRY_RUN=false (fail-safe by design)
 poetry run python -m poster.main --live
 
-# GROUP INDEX: per-group pipeline state (recording found on disk? flow fn in
-# REGISTRY? dry-run stamp in data/dryrun_ok.json?) + GAPS: recordings never
-# wired into groups.json, entries whose posting_code has no function.
-# The stamp file is per-machine (gitignored): a fresh clone starts unverified.
-poetry run python -m poster.main --status      # alias: ap-status
+# TARGETS ARE LIVE: each run fetches the identity's joined groups
+# (GroupsCometJoinsRootQuery + its pagination doc — see
+# poster/groups_fetch.py) and rotates: never-attempted first (FB joins
+# order), then oldest last-attempt from the ledger; cap
+# AP_MAX_POSTS_PER_RUN. THE only per-group gate = composer trigger
+# renders within 5s, else status `skipped` (posting not enabled there).
+# ap-groups = same fetch, print-only rotation report (no browser left open
+# after; read-only):
+poetry run python -m poster.main --list-groups  # alias: ap-groups
 
 poetry run pytest tests scraping_recorder/tests -q
 
@@ -63,7 +69,7 @@ Convenience (from `setup.sh`, registered in the shell rc): commands live in
 line, repo path self-resolves). `ap-record [URL]` = the record command above
 (no arg = bare browser, any site; `AP_RECORD_PROFILE=<dir>` overrides the
 profile); `ap-timeline [dir] [--full]` = newest dump under
-`.local-capture/manual_session/`; `ap-status` = `poster.main --status`.
+`.local-capture/manual_session/`; `ap-groups` = `poster.main --list-groups`.
 
 Recorder console: `s`+Enter screenshot+note, `q`+Enter quit & flush.
 Submodule gotchas: see `scraping_recorder/AGENTS.md` (poetry-install warning is
@@ -76,28 +82,49 @@ harmless; use `poetry run python -m pytest`, not PATH pytest).
    files sorted inside each car; upload one batch per car folder.
 3. OS file dialog: never let it open — `page.on("filechooser")` →
    `fc.set_files(...)`; fallback `set_input_files` on `input[type=file]`.
-4. `posting_code` in groups.json = NAME OF THE FLOW FUNCTION FOR THAT GROUP'S
-   COMPOSER LAYOUT (`poster/flows.py::<code>(page, post)`); many groups may
-   share one code. Unknown code = hard error, never guess.
-5. Random `uniform(AP_DELAY_MIN, AP_DELAY_MAX)` sleep before every group /
-   URL / publish action. USER RULE: waits must be short — 2-4s (2026-09-22;
-   the loader still hard-caps any config at 7s, never longer). Eliminated
-   2026-09-22: NO sleep between photo-batch attachments (settling is gated by
-   the `_wait_upload_settled` condition-wait) and post text is PASTED via
-   `execCommand('insertText')` (Enter per line) with the 1:1 read-back gate —
-   char-by-char keyboard.type survives only as one-shot fallback.
+4. TARGETS = the identity's JOINED groups fetched live each run
+   (poster/groups_fetch.py, [proven recording 20260922T214219Z]); rotation =
+   never-attempted first then oldest-ledger-attempt, capped
+   AP_MAX_POSTS_PER_RUN. Sole gate: the 'Escribe algo...' composer trigger
+   must RENDER within 5s of the group page, else the group is `skipped`
+   (posting not enabled for our identity — never treated as an error).
+   All Spanish layouts share ONE flow (group_composer_es_v1); a layout that
+   actually differs needs a recording + new flow fn first — never guess.
+   If the joins fetch itself fails, the run ABORTS (exit 4 + Discord) — a
+   broken fetch must never mean "post to nothing".
+5. Random `uniform(AP_DELAY_MIN, AP_DELAY_MAX)` sleep before sensitive steps
+   (first group open, before publish). USER RULE: general waits short — 2-4s
+   (loader hard-caps config at 7s, never longer). GROUP CHANGE is its own
+   category: uniform 10-15s (`AP_GROUP_SWITCH_MIN/MAX_SECONDS`, own ceiling
+   20s) after finishing one group, before opening the next — no sleep after
+   the last group. Eliminated 2026-09-22: NO sleep between photo-batch
+   attachments (settling = `_wait_upload_settled` condition-wait) and post
+   text is PASTED via `execCommand('insertText')` (Enter per line) with the
+   1:1 read-back gate — char-by-char keyboard.type survives only as one-shot
+   fallback.
 6. DEV SAFETY: never post or comment unless the selector is proven against a
    recording/dry-run. `AP_DRY_RUN=true` is default and fail-safe.
 7. MONITORING: exactly ONE Discord summary per run, sent only after it ends
    (success, failure, abort, crash — all notify). Dry-run attempts record as
-   `staged` and NEVER count as published. A webhook failure never changes
-   the run's exit code (`poster/notify.py` swallows everything).
+   `staged` and NEVER count as published; no-composer groups record as
+   `skipped` (⏭️ in the embed). A webhook failure never changes the run's
+   exit code (`poster/notify.py` swallows everything).
 
 ## Protocol facts (from recording 2026-09-17, group 249803862915566 Cuauhtémoc)
 
 - Login lands on MAIN account (c_user=61592579496197); Carmazon
   i_user/av=61592323007979 — must switch. UI is Spanish: composer trigger
   `Escribe algo...`, publish `Publicar`. Match text/aria, never obfuscated classes.
+- Identity MODES (`AP_POST_AS`), recording 20260922T210535Z (profile_switcher):
+  `page` = post as Carmazon; `profile` = post as the personal login. The
+  acting identity is the `av` param on /api/graphql requests — av=61592323007979
+  (Carmazon) vs av=61592579496197 (personal, == c_user). i_user cookie exists
+  ONLY for the page and CANNOT distinguish the personal profile switch.
+  The account-menu switcher lists BOTH rows in either state, and the personal
+  row text is "Carmazon Alex" (NOT the legal name "MrAlexei Villa") —
+  `AP_FB_MAIN_PROFILE_NAME`. 'Carmazon' is a substring of 'Carmazon Alex', so
+  the row matcher prefers EXACT text matches (CLICK_PROFILE_ITEM_JS). Group
+  composer flow is IDENTICAL in both modes.
 - Profile switch (verified): click `[aria-label="Tu perfil"]` (no img child),
   stamp the Carmazon menu row `data-ap-switch`, then Playwright locator
   `.click()` — JS-dispatched `.click()` and raw `mouse.click(x,y)` both fail
@@ -108,25 +135,23 @@ harmless; use `poetry run python -m pytest`, not PATH pytest).
   `upload.facebook.com/ajax/react_composer/attachments/photo/upload`.
   Bot answers the OS dialog via set_input_files / FileChooser — never clicks through it.
 
-## Group pipeline workflow (the index)
+## Adding groups (there is no file to edit anymore)
 
-ap-record → implement → verify is tracked automatically (`poster/groups_index.py`,
-alias `ap-status` / `--status`): status is COMPUTED from three sources
-(dumps on disk, REGISTRY functions, per-machine `data/dryrun_ok.json` stamp
-written after a successful dry run), never hand-declared. Adding a new group
-whose composer layout ALREADY has a flow (the common case — e.g. any Spanish
-group uses `group_composer_es_v1`): just add the groups.json entry and run a
-dry run; NO recording needed. ap-record is only for an unseen layout
-(different language UI, rules/questions gate, or a dry run failing on proven
-selectors). An entry whose `posting_code` has no function shows as a GAP.
+Join the group with the posting identity in the real browser — the next run
+picks it up automatically from the live joins fetch (order = FB's
+viewer_added sort). `ap-groups` shows every joined group + its rotation
+state. Recordings are ONLY for an unseen composer LAYOUT (different
+language UI, rules/questions gate, or a flow failing on proven selectors) —
+not per group. If the joins fetch ever fails (doc_id churn), the run aborts
+loudly (exit 4 + Discord); it never silently posts to "nothing".
 
 ## Conventions
 
 - All knobs in `.env` (`AP_` prefix, see `.env.example`); `.env`,
   `.local-capture/**`, and `data/car_photos/**` images are gitignored.
-- Roadmap: photo recording → monitoring/Discord summary ✅ (done 2026-09-17:
-  poster/results.py + poster/notify.py) → more groups ✅ flow collapsed
-  (2026-09-22: recordings proven identical → reuse `group_composer_es_v1`,
-  dry-run stamp is the only per-group gate) → scheduler + delivery
+- Roadmap: photo recording → monitoring/Discord summary ✅ → flow collapse
+  (2026-09-22: one Spanish composer serves all) ✅ → dynamic targets +
+  rotation ✅ (2026-09-22: groups.json/ap-status deleted; joined list
+  fetched live each run, ledger rotates) → scheduler + delivery
   verification (parse my_pending_content
   so "published" can mean admin-approved).

@@ -61,8 +61,8 @@ PYEOF
   # prove the helper actually defines all three commands in BOTH shells
   for sh in bash zsh; do
     if command -v "$sh" >/dev/null; then
-      "$sh" -c ". '${REPO}/shell/autoposter.sh' && type ap-record ap-timeline ap-status >/dev/null" \
-        && echo "    ${sh}: ap-record/ap-timeline/ap-status OK" \
+      "$sh" -c ". '${REPO}/shell/autoposter.sh' && type ap-record ap-timeline ap-groups >/dev/null" \
+        && echo "    ${sh}: ap-record/ap-timeline/ap-groups OK" \
         || { echo "    ${sh}: FAILED to load shell/autoposter.sh" >&2; exit 1; }
     fi
   done
@@ -87,7 +87,7 @@ Done. Next steps on a fresh machine:
                           # (2FA included — cookies persist in the profile).
                           # then record whatever group flow you want.
                           # 'q'+Enter saves the dump + asks purpose/label.
-  4. ap-status            # group index: recorded / implemented / dry-run /
-                          # gaps (recordings not yet wired into groups.json)
+  4. ap-groups            # live joined-group list of the configured identity
+                          # (+ rotation state from the ledger)
   5. ap-timeline --full   # time-ordered review of the newest dump
 EOF

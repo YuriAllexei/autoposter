@@ -25,7 +25,8 @@ ap-timeline() {
   echo "reviewing: $dump"
   cd "$_AP_REPO" && poetry run python scraping_recorder/session_timeline.py "$dump" "$@"
 }
-# ap-status — group index: recorded / implemented / dry-run-verified + gaps
-ap-status() {
-  cd "$_AP_REPO" && poetry run python -m poster.main --status
+# ap-groups — fetch the live joined-group list of the configured identity
+# (opens the browser; read-only) + rotation state from the ledger
+ap-groups() {
+  cd "$_AP_REPO" && poetry run python -m poster.main --list-groups
 }
