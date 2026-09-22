@@ -92,7 +92,6 @@ async def run_group(
 ) -> tuple[bool, str | None]:
     code = group["posting_code"]
     flow = get_flow(code)  # unknown code = KeyError, hard stop (never guess)
-    await human_sleep(cfg, log, f"open group {group['name']!r}")
     log(f"[group] {group['name']} -> {group['group_url']} (flow {code})")
     try:
         await page.goto(group["group_url"], wait_until="domcontentloaded", timeout=60000)
@@ -145,7 +144,7 @@ def make_finish(cfg: Config, recorder: RunRecorder):
             summary = recorder.summary(aborted=aborted)
             send_summary(
                 cfg.discord_webhook_url,
-                build_payload(summary, cfg.fb_posting_profile_name), log)
+                build_payload(summary, cfg.identity_label), log)
         except Exception as e:  # monitoring is best-effort by design
             log(f"monitor: {type(e).__name__}: {e}")
 
@@ -172,7 +171,9 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
     post = build_post(cfg)
 
     mode = "DRY RUN (will NOT publish)" if cfg.dry_run else "*** LIVE — WILL PUBLISH ***"
+    ident_label = cfg.identity_label
     print(f"[run] mode: {mode} | groups this run: {min(len(groups), cfg.max_posts_per_run)}"
+          f" | as: {cfg.post_as}={ident_label or '(unset)'}"
           f" | profile: {cfg.profile_dir}")
 
     cfg.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -193,25 +194,32 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
                 finish("run aborted: not logged in (c_user never appeared)", log)
                 return 2
             if not await ensure_active_profile(
-                ctx, page, posting_user_id=cfg.fb_posting_user,
-                posting_name=cfg.fb_posting_profile_name, log=log,
+                ctx, page, post_as=cfg.post_as,
+                posting_user_id=cfg.fb_posting_user,
+                main_user_id=cfg.fb_main_user,
+                posting_name=cfg.fb_posting_profile_name,
+                main_profile_name=cfg.fb_main_profile_name, log=log,
             ):
-                log("abort: not posting as the professional profile")
+                log("abort: not posting as the configured identity")
                 finish(f"run aborted: not posting as "
-                       f"{cfg.fb_posting_profile_name} (profile switch failed)", log)
+                       f"{ident_label or cfg.post_as} (identity switch failed)", log)
                 return 3
 
             ok = 0
             planned = groups[: cfg.max_posts_per_run]
+            # anti-detection pause after login/profile-switch, before the 1st
+            await human_sleep(cfg, log, "first group")
             for idx, group in enumerate(planned):
                 group_ok, err = await run_group(page, group, post, cfg, log)
                 recorder.record(group, group_ok, err)
                 if group_ok:
                     ok += 1
                 if idx + 1 < len(planned):
-                    # only BETWEEN groups (uniform 2-4s); no idle sleep after
-                    # the last one — the browser closes anyway
-                    await human_sleep(cfg, log, "next group")
+                    # USER RULE (2026-09-22): group change = uniform
+                    # 10-15s after finishing one group, before opening the
+                    # next. General action sleeps stay 2-4s.
+                    await human_sleep(cfg, log, "change to next group",
+                                      cfg.group_switch_min, cfg.group_switch_max)
             log(f"done: {ok} group(s) processed of "
                 f"{min(len(groups), cfg.max_posts_per_run)} queued "
                 f"({'dry-run staged' if cfg.dry_run else 'published'})")
@@ -228,6 +236,68 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
     return rc
 
 
+async def list_groups_async(cfg: Config) -> int:
+    """--list-groups: log in, adopt the configured identity, and fetch the
+    ACTUAL joined-groups list via the proven GroupsCometJoinsRootQuery
+    [recording 20260922T214219Z]. Read-only: opens the account's own list,
+    never posts. Annotates each group against data/groups.json."""
+    from .groups_fetch import GroupsFetchError, fetch_joined_groups
+    from .groups_index import GROUP_ID_RE
+    from .groups_index import load_groups as gi_load
+
+    cfg.profile_dir.mkdir(parents=True, exist_ok=True)
+    async with async_playwright() as p:
+        ctx = await p.firefox.launch_persistent_context(
+            str(cfg.profile_dir), headless=cfg.headless,
+            viewport={"width": cfg.viewport_width, "height": cfg.viewport_height},
+        )
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+
+        def log(msg: str) -> None:
+            print(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {msg}", flush=True)
+        try:
+            if not await ensure_login(ctx, page, log):
+                log("abort: not logged in")
+                return 2
+            if not await ensure_active_profile(
+                ctx, page, post_as=cfg.post_as,
+                posting_user_id=cfg.fb_posting_user,
+                main_user_id=cfg.fb_main_user,
+                posting_name=cfg.fb_posting_profile_name,
+                main_profile_name=cfg.fb_main_profile_name, log=log,
+            ):
+                log("abort: identity not active")
+                return 3
+            try:
+                groups = await fetch_joined_groups(page, av=cfg.identity_id,
+                                                   log=log)
+            except GroupsFetchError as e:
+                log(f"joins fetch failed: {e}")
+                return 4
+            listed = set()
+            for g in gi_load(cfg.groups_file):
+                m = GROUP_ID_RE.search(g.get("group_url", ""))
+                if m:
+                    listed.add(m.group(1))
+            print(f"\nJOINED GROUPS for identity {cfg.identity_label!r} "
+                  f"({cfg.identity_id}) — {len(groups)} total\n")
+            print(f"  {'group id':<18} in.json  name")
+            print("  " + "-" * 88)
+            for g in groups:
+                mark = "YES     " if g["id"] in listed else "-- new "
+                print(f"  {g['id']:<18} {mark} {g['name'][:64]}")
+            out = (cfg.screenshot_dir.parent / "groups" /
+                   f"joined_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            import json as _json
+            out.write_text(_json.dumps(groups, indent=2, ensure_ascii=False),
+                           encoding="utf-8")
+            print(f"\n[saved] {out}")
+            return 0
+        finally:
+            await ctx.close()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="poster", description="Facebook group auto-poster (see AGENTS.md)")
@@ -235,6 +305,10 @@ def main() -> int:
     ap.add_argument("--status", action="store_true",
                     help="print the group index (recorded/implemented/dry-run "
                          "states + gaps) and exit — no browser")
+    ap.add_argument("--list-groups", action="store_true",
+                    help="open the browser, become the configured identity, "
+                         "and FETCH the account's joined groups live "
+                         "(read-only; [recording 20260922T214219Z])")
     ap.add_argument("--dry-run", dest="dry", action="store_true", default=None,
                     help="force dry run regardless of .env")
     ap.add_argument("--live", dest="live", action="store_true",
@@ -243,6 +317,8 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_config()
+    if args.list_groups:
+        return asyncio.run(list_groups_async(cfg))
     if args.status:
         # no browser, no mutations: pure index report (also aliased ap-status)
         from .groups_index import status_report
