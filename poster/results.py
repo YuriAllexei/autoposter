@@ -23,17 +23,26 @@ STATUS_FAILED = "failed"
 STATUS_SKIPPED = "skipped"
 
 
+def _iter_records(ledger_path: Path):
+    """Parsed ledger dicts, streamed line-by-line; blank/corrupt skipped.
+    Shared by every ledger reader (rotation clock, counters)."""
+    if not ledger_path.exists():
+        return
+    with ledger_path.open(encoding="utf-8") as fh:
+        for raw in fh:
+            try:
+                rec = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                yield rec
+
+
 def last_attempt_ts(ledger_path: Path) -> dict[str, str]:
     """Latest ledger ts per group_id over ALL statuses — the rotation clock
     for picking which joined groups to post next (never-attempted first)."""
     last: dict[str, str] = {}
-    if not ledger_path.exists():
-        return last
-    for raw in ledger_path.read_text(encoding="utf-8").splitlines():
-        try:
-            rec = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
+    for rec in _iter_records(ledger_path):
         gid = str(rec.get("group_id") or "")
         ts = str(rec.get("ts") or "")
         if gid and (ts >= last.get(gid, "")):
@@ -46,16 +55,36 @@ def group_id_from_url(url: str) -> str:
     return m.group(1) if m else (url or "").strip() or "unknown"
 
 
+def normalize_group(group: dict) -> tuple[str, str]:
+    """(name, group_id) for BOTH record shapes: live-joined dicts carry
+    id/url (groups_fetch.JoinedGroup); legacy/manual ones carry group_url."""
+    url = str(group.get("url") or group.get("group_url") or "")
+    gid = str(group.get("id") or group_id_from_url(url))
+    return str(group.get("name") or url or "?"), gid
+
+
+def select_targets(groups: list, last_attempt: dict[str, str],
+                   cap: int, only: str | None = None) -> list:
+    """Rotation over live-joined groups: never-attempted first (preserving
+    FB's joins order), then least-recently-attempted. Cap = max posts per
+    run; skipped/no-composer attempts still rotate (a group may gain the
+    composer later, the 5s gate re-checks cheaply)."""
+    if cap <= 0:
+        return []
+    pool = list(groups)
+    if only:
+        pool = [g for g in pool if only in g["url"] or only == g["name"]
+                or only == g["id"]]
+    # stable sort: key = (has-been-attempted?, last ts) — ISO-8601 sorts right
+    pool.sort(key=lambda g: (1, last_attempt.get(g["id"], ""))
+              if g["id"] in last_attempt else (0, ""))
+    return pool[:cap]
+
+
 def count_published(ledger_path: Path) -> dict[str, int]:
     """All-time published count per group_id. Corrupt lines are skipped."""
     counts: dict[str, int] = {}
-    if not ledger_path.exists():
-        return counts
-    for raw in ledger_path.read_text(encoding="utf-8").splitlines():
-        try:
-            rec = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
+    for rec in _iter_records(ledger_path):
         if rec.get("status") == STATUS_PUBLISHED:
             gid = str(rec.get("group_id") or "unknown")
             counts[gid] = counts.get(gid, 0) + 1
@@ -85,11 +114,8 @@ class RunRecorder:
             status = STATUS_STAGED if self.dry_run else STATUS_PUBLISHED
         else:
             status = STATUS_FAILED
-        res = GroupResult(
-            name=str(group.get("name") or group.get("group_url") or "?"),
-            group_id=group_id_from_url(str(group.get("group_url", "") or
-                                            group.get("url", ""))),
-            status=status, error=error)
+        name, gid = normalize_group(group)
+        res = GroupResult(name=name, group_id=gid, status=status, error=error)
         self.results.append(res)
         self._append_ledger(res)
         return res
@@ -97,11 +123,9 @@ class RunRecorder:
     def record_skipped(self, group: dict, reason: str) -> GroupResult:
         """Composer never rendered (5s gate): group is not postable for this
         identity. Recorded for rotation, never counted as published."""
-        res = GroupResult(
-            name=str(group.get("name") or group.get("url") or "?"),
-            group_id=str(group.get("id") or
-                         group_id_from_url(str(group.get("group_url", "")))),
-            status=STATUS_SKIPPED, error=reason)
+        name, gid = normalize_group(group)
+        res = GroupResult(name=name, group_id=gid, status=STATUS_SKIPPED,
+                          error=reason)
         self.results.append(res)
         self._append_ledger(res)
         return res
@@ -118,6 +142,8 @@ class RunRecorder:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
 
     def cumulative_published(self) -> dict[str, int]:
+        # deliberately RE-reads the ledger (not reused from rotation):
+        # by summary time it must include THIS run's own appends.
         return count_published(self.ledger_path)
 
     def summary(self, aborted: str | None = None) -> dict:

@@ -10,19 +10,16 @@ send_summary run end-to-end so payload text is asserted as shipped.
 """
 import asyncio
 import json
-import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO))
-
 pytest.importorskip("playwright")  # main.py imports it at module level
 
-from poster import groups_fetch, notify
 from poster import main as m
+from poster import notify
 from poster.config import Config
 
 JOINED = [
@@ -108,7 +105,7 @@ def _make_harness(tmp_path, monkeypatch, *, dry=False, joined=None):
     async def fake_fetch(page, *, av, log=None, max_pages=25):
         return list(joined if joined is not None else JOINED)
 
-    monkeypatch.setattr(groups_fetch, "fetch_joined_groups", fake_fetch)
+    monkeypatch.setattr(m, "fetch_joined_groups", fake_fetch)
 
     async def ok_login(ctx, page, log, login_timeout=900):
         return True

@@ -5,10 +5,7 @@ Ground truth (recording 20260922T210535Z, profile_switcher):
   av=61592579496197  while acting as PERSONAL profile    (no i_user; c_user=...)
 The switcher menu lists rows "Carmazon" and "Carmazon Alex" in EITHER state.
 """
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
@@ -84,3 +81,11 @@ def test_invalid_post_as_raises(tmp_path):
     env.write_text("AP_POST_AS=bogus\n")
     with pytest.raises(ValueError):
         load_config(env_file=env)
+
+
+def test_identity_id_tracks_post_as(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("AP_FB_MAIN_USER=111\nAP_FB_POSTING_USER=222\nAP_POST_AS=profile\n")
+    assert load_config(env_file=env).identity_id == "111"
+    env.write_text("AP_FB_MAIN_USER=111\nAP_FB_POSTING_USER=222\nAP_POST_AS=page\n")
+    assert load_config(env_file=env).identity_id == "222"

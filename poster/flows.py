@@ -15,7 +15,7 @@ Repo rules obeyed by every flow:
     publish step. There is NO sleep per photo batch: photos attach as fast as
     possible, and upload settling is gated by the condition-wait
     _wait_upload_settled, not by a timer
-  - post text inserted 1:1 with READ-BACK verification (rule 3): pasted at
+  - post text inserted 1:1 with READ-BACK verification (rule 1): pasted at
     paste-speed (document.execCommand('insertText') per line + Enter between
     lines, so newlines survive) instead of char-by-char keyboard.type — then
     read back, with ONE keyboard.type fallback; a second mismatch = FlowError
@@ -27,7 +27,7 @@ Repo rules obeyed by every flow:
   - DRY RUN stops before Publicar and saves evidence instead
 
 Selector provenance: recording 20260917T063422Z (group 249803862915566) +
-scripts/dryrun_post.py (topmost-trigger stamp, dialog-scoped actions, stale
+the 2026-09-17 recording sessions (topmost-trigger stamp, dialog-scoped actions, stale
 draft clear, keyboard.type). Match by text/aria/role, never obfuscated classes.
 """
 from __future__ import annotations
@@ -70,7 +70,8 @@ COMPOSER_TRIGGER_RE = re.compile(
     r"[.…]{0,3}\s*$",
     re.IGNORECASE,
 )
-# [proven: dryrun_post.py STAMP_TRIGGER_JS — exact texts + /^Escribe algo\b/ fallback]
+# [proven: recordings 20260917T063422Z + 2026-09-22 dry runs — exact texts +
+#  /^Escribe algo\b/ fallback]
 STAMP_TRIGGER_JS = r"""
 (() => {
   document.querySelectorAll('[data-ap-target]').forEach(e => e.removeAttribute('data-ap-target'));
@@ -89,9 +90,6 @@ STAMP_TRIGGER_JS = r"""
     + ':' + els.length + ' matches';
 })()
 """
-COMPOSER_MODAL_RE = re.compile(
-    r"Crea una publicaci[oó]n|Create a (?:public )?post", re.IGNORECASE
-)
 PUBLISH_RE = re.compile(r"^(Publicar|Post|Publish)$", re.IGNORECASE)
 PHOTO_LABEL_RE = re.compile(r"Fotograf[ií]a|Foto|Photo|Imagen|Image", re.IGNORECASE)
 
@@ -99,7 +97,7 @@ PHOTO_LABEL_RE = re.compile(r"Fotograf[ií]a|Foto|Photo|Imagen|Image", re.IGNORE
 async def human_sleep(cfg: Config, log: log_fn, why: str = "",
                       lo: float | None = None, hi: float | None = None
                       ) -> None:
-    """[rule 6] uniform(min,max) seconds before any sensitive action.
+    """[rule 5] uniform(min,max) seconds before any sensitive action.
     lo/hi override the general range (used for the 10-15s group switch)."""
     s = random.uniform(cfg.delay_min if lo is None else lo,
                        cfg.delay_max if hi is None else hi)
@@ -145,7 +143,7 @@ async def _ensure_text_1to1(page: Page, box, text: str, cfg: Config, log: log_fn
     log(f"text pasted 1:1 ({len(text)} chars, read-back verified)")
 
 
-# ---- the photo attach (rule 9 solution) --------------------------------------
+# ---- the photo attach (rule 3 contract) --------------------------------------
 
 async def attach_car_photos(page: Page, post: Post, cfg: Config, log: log_fn) -> None:
     """Upload photos car-by-car; order = post.txt car order (rules 2+3).
@@ -237,11 +235,11 @@ async def group_composer_es_v1(
     The runner has ALREADY navigated to the group URL and waited for feed
     hydration; this owns composer-internal steps only. All actions scoped to
     div[role="dialog"] — we can never type into a comment box by accident
-    (proven discipline from dryrun_post.py).
+    (proven discipline from the 2026-09-17/22 sessions).
     """
     box = page.locator('div[role="dialog"] [contenteditable="true"]').first
 
-    # 0) a stale/already-open dialog? (proven behavior from dryrun_post.py)
+    # 0) a stale/already-open dialog? (proven behavior, recording 20260917T063422Z)
     if await box.count() and await box.is_visible():
         log("composer dialog already open — skipping trigger")
     else:
@@ -274,7 +272,7 @@ async def group_composer_es_v1(
                                            extra={"cover": cover})
                 raise FlowError(f"trigger click intercepted ({cover}). {shot}") from e
 
-    # 2) composer textbox visible inside dialog; also confirm modal hint  [proven]
+    # 2) composer textbox visible inside dialog  [proven]
     try:
         await box.wait_for(state="visible", timeout=15000)
     except PWTimeoutError as e:
@@ -295,10 +293,10 @@ async def group_composer_es_v1(
     # 4) text 1:1 with read-back gate
     await _ensure_text_1to1(page, box, post.text, cfg, log)
 
-    # 5) photos (rule 9: OS dialog answered in-process)
+    # 5) photos (rule 3: OS dialog answered in-process)
     await attach_car_photos(page, post, cfg, log)
 
-    # 6) publish gate  [rule 4: dry-run stops here]
+    # 6) publish gate  [rule 6 fail-safe: dry-run stops here]
     await human_sleep(cfg, log, "PUBLISH" if not cfg.dry_run else "stop (DRY RUN)")
     pub = page.locator('div[role="dialog"] [role="button"]').filter(
         has_text=PUBLISH_RE).last
@@ -332,9 +330,4 @@ async def group_composer_es_v1(
     log("CLICKED Publicar")
     return {"published": True}
 
-
-# ---- registry / dispatcher ----------------------------------------------------
-# (groups.json era is over: targets are live-joined groups and every Spanish
-#  group composer is identical — main.run_group calls group_composer_es_v1
-#  directly. See poster/groups_fetch.py + AGENTS.md.)
 

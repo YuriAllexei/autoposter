@@ -15,12 +15,8 @@ No browser: page/box/keyboard are async mocks; the composer model mirrors what
 the real event handlers would leave in the contenteditable.
 """
 import asyncio
-import sys
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from poster import flows
 from poster.config import Config

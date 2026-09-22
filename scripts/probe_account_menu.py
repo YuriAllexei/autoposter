@@ -10,11 +10,12 @@ Usage: poetry run python scripts/probe_account_menu.py
 """
 import asyncio
 import json
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 from playwright.async_api import async_playwright
+
+from poster.fb import OPEN_ACCOUNT_MENU_JS, cookie_map
 
 PROFILE = Path(".local-capture/profiles/facebook")
 OUT = Path(".local-capture/shots")
@@ -47,24 +48,8 @@ DUMP_JS = r"""
 })()
 """
 
-OPEN_MENU_JS = r"""
-(() => {
-  let btn = document.querySelector('[role="button"][aria-label="Tu perfil"]')
-    || document.querySelector('[role="button"][aria-label="Your profile"]');
-  if (!btn) {
-    const cands = Array.from(document.querySelectorAll('[role="button"]')).filter(el => {
-      const r = el.getBoundingClientRect();
-      const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-      return r.width > 0 && r.top < 90 && r.left > innerWidth * 0.4
-        && /perfil|profile|cuenta|account/.test(aria);
-    });
-    btn = cands[cands.length - 1] || null;
-  }
-  if (!btn) return 'no-account-button';
-  btn.click();
-  return 'clicked:' + (btn.getAttribute('aria-label') || '?');
-})()
-"""
+# the SAME proven opener poster.fb ships (single source of truth for the
+# account-menu button): OPEN_ACCOUNT_MENU_JS imported above.
 
 
 async def main() -> None:
@@ -76,11 +61,10 @@ async def main() -> None:
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             await page.goto("https://www.facebook.com/", timeout=60000)
             await page.wait_for_timeout(5000)
-            cookies = {c.get("name"): c.get("value")
-                       for c in await ctx.cookies("https://www.facebook.com")}
+            cookies = await cookie_map(ctx)
             print("cookies:", json.dumps(
                 {k: cookies.get(k) for k in ("c_user", "i_user", "av")}))
-            print("menu:", await page.evaluate(OPEN_MENU_JS))
+            print("menu:", await page.evaluate(OPEN_ACCOUNT_MENU_JS))
             await page.wait_for_timeout(2500)
             data = json.loads(await page.evaluate(DUMP_JS))
             print("avatar_aria:", data.get("avatar_aria"))

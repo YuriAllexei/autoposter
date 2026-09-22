@@ -1,7 +1,7 @@
 """Facebook browser primitives — selectors & flows proven by recordings/dry-runs.
 
 Selector status legend (repo rule: never act on an unproven selector):
-  [proven]  verified against recording 20260917T063422Z or scripts/dryrun_post.py
+  [proven]  verified against a recording id or a live dry run (see AGENTS.md)
   [robust]  structural (role/type/aria/text matchers), not obfuscated classes
 
 Proven this session (recording 20260917T063422Z, group 249803862915566):
@@ -26,10 +26,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page
-
-NON_APP_URLS = re.compile(
-    r"/(login|checkpoint|two_step_verification|recover|security)/|recaptcha|/tr/"
-)
 
 # ---- proven selector JS (shared with scripts/probe_group.py) ---------------
 
@@ -242,15 +238,19 @@ async def ensure_active_profile(
         return False
     await _track_av(page)
 
-    async def on_target() -> bool:
-        return identity_ok(await cookie_map(ctx), post_as=post_as,
-                           posting_user_id=posting_user_id,
-                           main_user_id=main_user_id,
-                           av=await get_av(ctx, page))
+    async def check_identity() -> tuple[bool, str | None]:
+        """ONE get_av sample per check — it can wait ~2s for the first
+        graphql request; calling it twice doubles the dead wait."""
+        av = await get_av(ctx, page)
+        ok = identity_ok(await cookie_map(ctx), post_as=post_as,
+                         posting_user_id=posting_user_id,
+                         main_user_id=main_user_id, av=av)
+        return ok, av
 
-    if await on_target():
+    ok0, av0 = await check_identity()
+    if ok0:
         log(f"active identity already correct: {row_name!r} "
-            f"(post_as={post_as}, av={await get_av(ctx, page) or 'cookie-fallback'})")
+            f"(post_as={post_as}, av={av0 or 'cookie-fallback'})")
         return True
     log(f"switching active identity to {row_name!r} (post_as={post_as}) ...")
     try:
@@ -287,7 +287,7 @@ async def ensure_active_profile(
     deadline = time.time() + 600
     while not switched and time.time() < deadline:
         await page.wait_for_timeout(5000)
-        if await on_target():
+        if (await check_identity())[0]:
             switched = True
             break
         if attempts < 6:
@@ -300,7 +300,7 @@ async def ensure_active_profile(
             except Exception as e:
                 log(f"switch err: {type(e).__name__}")
         await page.wait_for_timeout(5000)
-        if await on_target():
+        if (await check_identity())[0]:
             switched = True
             break
     if not switched:
@@ -309,7 +309,7 @@ async def ensure_active_profile(
         end = time.time() + 600
         while time.time() < end and not switched:
             await asyncio.sleep(3)
-            switched = await on_target()
+            switched = (await check_identity())[0]
     if switched:
         log(f"active identity = {row_name} (post_as={post_as}, "
             f"av={await get_av(ctx, page)})")
@@ -323,9 +323,12 @@ def _stamp() -> str:
 
 
 async def dump_evidence(
-    page: Page, dir_: Path, tag: str, html: str = "", extra: dict | None = None
-) -> Path:
-    """Selector-miss / dry-run evidence: screenshot + optional html + meta json."""
+    page: Page, dir_: Path, tag: str, html: str = "",
+    extra: dict | None = None,
+) -> Path | None:
+    """Selector-miss / dry-run evidence: screenshot + optional html + meta
+    json. Returns the most useful artifact that ACTUALLY exists (a dead
+    browser must never make the log claim a missing screenshot is there)."""
     dir_.mkdir(parents=True, exist_ok=True)
     base = dir_ / f"{tag}_{_stamp()}"
     try:
@@ -333,9 +336,17 @@ async def dump_evidence(
     except Exception:
         pass
     if html:
-        (base.with_suffix(".html")).write_text(html, encoding="utf-8")
-    (base.with_suffix(".json")).write_text(
-        json.dumps({"url": page.url, **(extra or {})}, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return base.with_suffix(".png")
+        try:
+            (base.with_suffix(".html")).write_text(html, encoding="utf-8")
+        except Exception:
+            pass
+    try:
+        (base.with_suffix(".json")).write_text(
+            json.dumps({"url": page.url, **(extra or {})}, indent=2,
+                     ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    for suffix in (".png", ".html", ".json"):
+        if base.with_suffix(suffix).exists():
+            return base.with_suffix(suffix)
+    return None

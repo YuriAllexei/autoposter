@@ -45,7 +45,7 @@ class JoinedGroup(TypedDict):
     id: str
     name: str
     url: str
-    last_visited: int | None
+    last_visited: int | None  # informational only (saved snapshot)
 
 
 class GroupsFetchError(RuntimeError):
@@ -189,7 +189,8 @@ async def fetch_joined_groups(page: Page, *, av: str,
                               max_pages: int = MAX_PAGES) -> list[JoinedGroup]:
     """All groups the identity `av` has joined (follows the joins-tab
     pagination). Raises GroupsFetchError on any auth/shape problem —
-    callers must treat that as 'use the static registry', never 'post 0'."""
+    callers must treat it as FATAL (run aborts, exit 4 + Discord);
+    a failed fetch must never be mistaken for 'the account joined 0'."""
     if not av:
         raise GroupsFetchError("fetch needs the acting identity's av id")
 
@@ -197,11 +198,8 @@ async def fetch_joined_groups(page: Page, *, av: str,
         if log:
             log(m)
 
-    if "facebook.com" not in (page.url or ""):
-        await page.goto("https://www.facebook.com/", wait_until="domcontentloaded",
-                        timeout=60000)
-    # The joins page itself renders the boot-load (and is what the recording
-    # used) — go there so token resolution never depends on home-page luck.
+    # Straight to the joins tab — it renders the boot-load tokens and is
+    # what the recording used (an extra home-page load bought nothing).
     if "/groups/joins" not in (page.url or ""):
         await page.goto("https://www.facebook.com/groups/joins/"
                         "?nav_source=tab&ordering=viewer_added",

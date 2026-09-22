@@ -1,10 +1,6 @@
 """Pins for the dynamic joins-fetch (real proof = live --list-groups run)."""
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from poster.config import load_config
 from poster.groups_fetch import DOC_ID_JOINS, FRIENDLY_NAME, PAG_DOC_ID, PAG_FRIENDLY
 
 REPO = Path(__file__).resolve().parents[1]
@@ -24,12 +20,3 @@ def test_pagination_doc_pinned_to_live_sniff():
     assert PAG_DOC_ID == "9974006939348139"
     assert PAG_FRIENDLY == "GroupsCometAllJoinedGroupsSectionPaginationQuery"
 
-
-def test_identity_id_tracks_post_as(tmp_path, monkeypatch):
-    env = tmp_path / ".env"
-    env.write_text("AP_FB_MAIN_USER=111\nAP_FB_POSTING_USER=222\nAP_POST_AS=profile\n")
-    cfg = load_config(env_file=env)
-    assert cfg.identity_id == "111"
-    env.write_text("AP_FB_MAIN_USER=111\nAP_FB_POSTING_USER=222\nAP_POST_AS=page\n")
-    cfg = load_config(env_file=env)
-    assert cfg.identity_id == "222"

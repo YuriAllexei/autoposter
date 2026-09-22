@@ -11,8 +11,9 @@ import time
 import urllib.error
 import urllib.request
 
+from .results import STATUS_FAILED, STATUS_SKIPPED
+
 EMBED_DESC_LIMIT = 4096
-ICON = {"published": "✅", "staged": "🧪", "failed": "❌"}
 COLOR_OK, COLOR_DRY, COLOR_BAD = 0x2ECC71, 0xF1C40F, 0xE74C3C
 # Discord sits behind Cloudflare: the default Python-urllib UA gets HTTP 403
 # error code 1010 (proven 2026-09-17), so we must announce ourselves.
@@ -33,9 +34,9 @@ def build_payload(summary: dict, profile_name: str = "") -> dict:
     totals = summary.get("totals_published_all_time", {})
     for g in summary["groups"]:
         name = str(g["name"])[:80]
-        if g["status"] == "failed":
+        if g["status"] == STATUS_FAILED:
             lines.append(f"❌ {name} — `{str(g.get('error') or '')[:120]}`")
-        elif g["status"] == "skipped":
+        elif g["status"] == STATUS_SKIPPED:
             lines.append(f"⏭️ {name} — no composer (not postable for us)")
         elif dry:
             lines.append(f"🧪 {name} — composer staged, NOT published")
@@ -43,7 +44,7 @@ def build_payload(summary: dict, profile_name: str = "") -> dict:
             lines.append(f"✅ {name} — all-time published: "
                          f"{totals.get(str(g['group_id']), 0)}")
     title = (
-        f"autoposter · {profile_name or 'Carmazon'} · "
+        f"autoposter · {profile_name or 'autoposter'} · "
         f"{'DRY RUN' if dry else 'LIVE'} · {summary['run_id']}"
     )
     return {

@@ -1,5 +1,5 @@
 # autoposter shell integration — sourced from ~/.bashrc or ~/.zshrc.
-# Defines: ap-record, ap-timeline, ap-status.  bash + zsh compatible.
+# Defines: ap-record, ap-timeline, ap-groups.  bash + zsh compatible.
 # Repo path resolves from THIS file's location, so moving/cloning the repo
 # needs no rc edits beyond the single source line setup.sh installs.
 _AP_SELF="${BASH_SOURCE:-}"

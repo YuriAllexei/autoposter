@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import random
+import re
 import sys
 from datetime import UTC, datetime
 
@@ -28,10 +29,15 @@ from playwright.async_api import async_playwright
 
 from .config import Config, load_config
 from .fb import dump_evidence, ensure_active_profile, ensure_login
-from .flows import FlowError, Post, group_composer_es_v1, human_sleep
+from .flows import COMPOSER_TRIGGER_RE, FlowError, Post, group_composer_es_v1, human_sleep
+from .groups_fetch import GroupsFetchError, fetch_joined_groups
 from .notify import build_payload, send_summary
 from .photos import collect_photos
-from .results import RunRecorder, last_attempt_ts
+from .results import RunRecorder, last_attempt_ts, select_targets
+
+# runner-internal outcome of ONE group visit (ledger STATUS_* mapping
+# happens in the loop: posted -> staged/published by dry_run flag)
+POSTED, SKIPPED, FAILED = "posted", "skipped", "failed"
 
 
 class Tee:
@@ -48,22 +54,36 @@ class Tee:
             sink.flush()
 
 
-def select_targets(groups: list, last_attempt: dict[str, str],
-                   cap: int, only: str | None = None) -> list:
-    """Rotation over live-joined groups: never-attempted first (preserving
-    FB's joins order), then least-recently-attempted. Cap = max posts per
-    run; skipped/no-composer attempts still rotate (a group may gain the
-    composer later, the 5s gate re-checks cheaply)."""
-    if cap <= 0:
-        return []
-    pool = list(groups)
-    if only:
-        pool = [g for g in pool if only in g["url"] or only == g["name"]
-                or only == g["id"]]
-    # stable sort: key = (has-been-attempted?, last ts) — ISO-8601 sorts right
-    pool.sort(key=lambda g: (1, last_attempt.get(g["id"], ""))
-              if g["id"] in last_attempt else (0, ""))
-    return pool[:cap]
+def make_log():
+    """UTC-timestamped logger shared by every entry point."""
+    def log(msg: str) -> None:
+        print(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {msg}", flush=True)
+    return log
+
+
+async def launch(cfg: Config, p):
+    """The ONE persistent-profile bring-up (viewport from cfg)."""
+    cfg.profile_dir.mkdir(parents=True, exist_ok=True)
+    ctx = await p.firefox.launch_persistent_context(
+        str(cfg.profile_dir), headless=cfg.headless,
+        viewport={"width": cfg.viewport_width, "height": cfg.viewport_height})
+    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+    return ctx, page
+
+
+async def adopt_identity(ctx, page, cfg: Config, log) -> str:
+    """The two proven pre-conditions every entry point must pass before
+    touching a group: live session + configured identity.
+    Returns 'ok' | 'login' | 'identity' (caller maps to its exit code)."""
+    if not await ensure_login(ctx, page, log):
+        return "login"
+    if not await ensure_active_profile(
+        ctx, page, post_as=cfg.post_as, posting_user_id=cfg.fb_posting_user,
+        main_user_id=cfg.fb_main_user, posting_name=cfg.fb_posting_profile_name,
+        main_profile_name=cfg.fb_main_profile_name, log=log,
+    ):
+        return "identity"
+    return "ok"
 
 
 def build_post(cfg: Config) -> Post:
@@ -75,19 +95,49 @@ def build_post(cfg: Config) -> Post:
     return Post(text=text, cars=cars)
 
 
-async def composer_gate(page, timeout_s: float = 5.0) -> bool:
+# Buy/sell groups can open on their MARKETPLACE tab, where the composer is
+# "Vender algo" (a sell form, NOT our proven text-post layout). Evidence:
+# shots/no_composer_20260922T235159Z.png (group 249803862915566).
+MARKETPLACE_TRIGGER_RE = re.compile(r"^\s*(?:Vender algo|Sell something)",
+                                    re.IGNORECASE)
+GATE_TAB_CLICK_JS = r"""
+(() => {
+  const norm = t => (t || "").replace(/\s+/g, " ").trim();
+  const tab = Array.from(document.querySelectorAll('[role="tab"]')).find(
+    el => /^(Publicaciones|Publicaci[oó]n|Posts|Discussion)$/i.test(norm(el.innerText)));
+  if (!tab) return "no-tab";
+  tab.click();
+  return "clicked";
+})()
+"""
+
+
+async def composer_gate(page, timeout_s: float = 5.0) -> tuple[bool, str]:
     """USER RULE (2026-09-22): the SOLE posting-capability gate — does the
     'Escribe algo...' trigger RENDER within 5s of the group page loading?
-    Not present => this group doesn't allow our identity to post; skip."""
-    from .flows import COMPOSER_TRIGGER_RE
-
+    Not present => skip. One bounded recovery: buy/sell groups sometimes land
+    on their marketplace tab, so click Publicaciones/Posts once and re-check
+    (tab click is navigation only; posting stays gated)."""
     try:
         await page.get_by_text(COMPOSER_TRIGGER_RE).first.wait_for(
             state="visible", timeout=timeout_s * 1000
         )
-        return True
+        return True, ""
     except Exception:
-        return False
+        pass
+    try:
+        if await page.evaluate(GATE_TAB_CLICK_JS) == "clicked":
+            await page.get_by_text(COMPOSER_TRIGGER_RE).first.wait_for(
+                state="visible", timeout=timeout_s * 1000)
+            return True, ""
+    except Exception:
+        pass
+    try:
+        if await page.get_by_text(MARKETPLACE_TRIGGER_RE).first.is_visible():
+            return False, " (marketplace tab 'Vender algo' — unproven layout)"
+    except Exception:
+        pass
+    return False, ""
 
 
 async def verify_pending(page, group_url: str, cfg: Config, log) -> None:
@@ -97,6 +147,8 @@ async def verify_pending(page, group_url: str, cfg: Config, log) -> None:
     await human_sleep(cfg, log, "pending-content check")
     try:
         await page.goto(pending, wait_until="domcontentloaded", timeout=60000)
+        # pending-list render settle (page wait, not an anti-detection
+        # sleep — deliberately outside the human_sleep cfg knobs)
         await page.wait_for_timeout(random.uniform(2000, 4000))
         shot = await dump_evidence(page, cfg.screenshot_dir, "pending_content")
         log(f"verify: pending-content page captured -> {shot}")
@@ -111,20 +163,28 @@ async def run_group(
     group = a live-joined record {id, name, url} from poster.groups_fetch."""
     url = group["url"]
     log(f"[group] {group['name']} -> {url}")
+    goto_err: str | None = None
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
-        log(f"[group] goto note: {type(e).__name__}")
-    if not await composer_gate(page):
-        log("[group] skip: composer trigger never rendered (5s gate) — "
-            "posting not enabled for this identity")
+        # tolerated: domcontentloaded can stall while the SPA still renders
+        goto_err = f"{type(e).__name__}: {e}"
+        log(f"[group] goto note: {goto_err}")
+    gate_ok, gate_why = await composer_gate(page)
+    if not gate_ok:
+        if goto_err:
+            # AGENTS rule 4: "skipped" MEANS composer-not-enabled. A dead
+            # navigation is an ERROR — never record it as not-postable.
+            log("[group] FAIL goto broke AND no composer rendered")
+            return FAILED, f"goto failed ({goto_err}); composer never seen"
+        log(f"[group] skip: composer trigger never rendered (5s gate){gate_why}")
         try:
             shot = await dump_evidence(page, cfg.screenshot_dir, "no_composer",
                                        html=await page.content())
             log(f"[group] skip evidence: {shot}")
         except Exception:
             pass
-        return "skipped", "no composer within 5s (not enabled for identity)"
+        return SKIPPED, f"no composer within 5s{gate_why}"
     await page.evaluate("window.scrollTo(0, 0)")
     await page.wait_for_timeout(2000)
     try:
@@ -135,10 +195,10 @@ async def run_group(
             await page.keyboard.press("Escape")  # close composer, leave nothing staged
         except Exception:
             pass
-        return "failed", f"flow_error: {e}"
+        return FAILED, f"flow_error: {e}"
     if not cfg.dry_run:
         await verify_pending(page, url, cfg, log)
-    return "posted", None
+    return POSTED, None
 
 
 def make_finish(cfg: Config, recorder: RunRecorder):
@@ -173,48 +233,36 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
         run_id=datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
         dry_run=cfg.dry_run)
     finish = make_finish(cfg, recorder)
-    if not cfg.post_text_file.exists():
+    try:
+        post = build_post(cfg)
+    except FileNotFoundError:
         print(f"[run] missing {cfg.post_text_file} — nothing to post")
         finish("run aborted: missing data/post.txt")
         return 1
-    post = build_post(cfg)
 
     mode = "DRY RUN (will NOT publish)" if cfg.dry_run else "*** LIVE — WILL PUBLISH ***"
     ident_label = cfg.identity_label
     print(f"[run] mode: {mode} | as: {cfg.post_as}={ident_label or '(unset)'}"
           f" | profile: {cfg.profile_dir}")
 
-    cfg.profile_dir.mkdir(parents=True, exist_ok=True)
     cfg.screenshot_dir.mkdir(parents=True, exist_ok=True)
     async with async_playwright() as p:
-        ctx = await p.firefox.launch_persistent_context(
-            str(cfg.profile_dir), headless=cfg.headless,
-            viewport={"width": cfg.viewport_width, "height": cfg.viewport_height},
-        )
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        ctx, page = await launch(cfg, p)
         rc = 1
-
-        def log(msg: str) -> None:
-            print(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {msg}", flush=True)
+        log = make_log()
 
         try:
-            if not await ensure_login(ctx, page, log):
+            state = await adopt_identity(ctx, page, cfg, log)
+            if state == "login":
                 finish("run aborted: not logged in (c_user never appeared)", log)
                 return 2
-            if not await ensure_active_profile(
-                ctx, page, post_as=cfg.post_as,
-                posting_user_id=cfg.fb_posting_user,
-                main_user_id=cfg.fb_main_user,
-                posting_name=cfg.fb_posting_profile_name,
-                main_profile_name=cfg.fb_main_profile_name, log=log,
-            ):
+            if state == "identity":
                 log("abort: not posting as the configured identity")
                 finish(f"run aborted: not posting as "
                        f"{ident_label or cfg.post_as} (identity switch failed)", log)
                 return 3
 
             # ---- dynamic targets: live joined groups of THIS identity ----
-            from .groups_fetch import GroupsFetchError, fetch_joined_groups
             try:
                 joined = await fetch_joined_groups(page, av=cfg.identity_id,
                                                    log=log)
@@ -239,14 +287,16 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
             await human_sleep(cfg, log, "first group")
             for idx, group in enumerate(planned):
                 status, err = await run_group(page, group, post, cfg, log)
-                if status == "posted":
+                if status == POSTED:
                     recorder.record(group, True)
                     ok += 1
-                elif status == "skipped":
+                elif status == SKIPPED:
                     recorder.record_skipped(group, err or "no composer")
                     skipped += 1
-                else:
+                elif status == FAILED:
                     recorder.record(group, False, err)
+                else:  # unknown status = programmer error, say so LOUD
+                    raise RuntimeError(f"run_group returned unknown status {status!r}")
                 if idx + 1 < len(planned):
                     # USER RULE (2026-09-22): group change = uniform
                     # 10-15s after finishing one group, before opening the
@@ -259,8 +309,8 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
             rc = 0 if ok else 1
             finish(None, log)
         except Exception as e:
-            # e.g. unknown posting_code: keep the hard-error traceback, but
-            # let Discord know the run died before re-raising.
+            # keep the hard-error traceback, but let Discord know the
+            # run died before re-raising.
             log(f"[run] FATAL: {type(e).__name__}: {e}")
             finish(f"run crashed: {type(e).__name__}: {e}", log)
             raise
@@ -274,30 +324,16 @@ async def list_groups_async(cfg: Config) -> int:
     ACTUAL joined-groups list via the proven GroupsCometJoinsRootQuery
     [recording 20260922T214219Z]. Read-only: opens the account's own list,
     never posts. Annotates each group with its rotation state (ledger)."""
-    from .groups_fetch import GroupsFetchError, fetch_joined_groups
-    from .results import last_attempt_ts
 
-    cfg.profile_dir.mkdir(parents=True, exist_ok=True)
     async with async_playwright() as p:
-        ctx = await p.firefox.launch_persistent_context(
-            str(cfg.profile_dir), headless=cfg.headless,
-            viewport={"width": cfg.viewport_width, "height": cfg.viewport_height},
-        )
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-
-        def log(msg: str) -> None:
-            print(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {msg}", flush=True)
+        ctx, page = await launch(cfg, p)
+        log = make_log()
         try:
-            if not await ensure_login(ctx, page, log):
+            state = await adopt_identity(ctx, page, cfg, log)
+            if state == "login":
                 log("abort: not logged in")
                 return 2
-            if not await ensure_active_profile(
-                ctx, page, post_as=cfg.post_as,
-                posting_user_id=cfg.fb_posting_user,
-                main_user_id=cfg.fb_main_user,
-                posting_name=cfg.fb_posting_profile_name,
-                main_profile_name=cfg.fb_main_profile_name, log=log,
-            ):
+            if state == "identity":
                 log("abort: identity not active")
                 return 3
             try:

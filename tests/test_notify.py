@@ -1,10 +1,6 @@
 """Unit tests for the Discord notifier (payload build; network mocked)."""
 import json
-import sys
 import urllib.error
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from poster import notify
 from poster.notify import EMBED_DESC_LIMIT, build_payload

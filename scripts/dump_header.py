@@ -1,7 +1,11 @@
 """Dump the real Facebook header buttons so we can write a correct switcher selector."""
-import asyncio, json
+import asyncio
+import json
 from pathlib import Path
+
 from playwright.async_api import async_playwright
+
+from poster.fb import cookie_map
 
 PROFILE = str(Path(__file__).resolve().parent.parent / ".local-capture/profiles/facebook")
 
@@ -32,15 +36,13 @@ async def main():
         ctx = await p.firefox.launch_persistent_context(PROFILE, headless=False)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         try:
-            cookies = await ctx.cookies("https://www.facebook.com")
-            cu = next((c.get("value") for c in cookies if c.get("name")=="c_user"), None)
-            iu = next((c.get("value") for c in cookies if c.get("name")=="i_user"), None)
-            print("c_user=", cu, "i_user=", iu, flush=True)
-        except Exception as e:
+            cm = await cookie_map(ctx)
+            print("c_user=", cm.get("c_user"), "i_user=", cm.get("i_user"), flush=True)
+        except Exception as e:  # noqa: BLE001 - probe must survive any CDP hiccup
             print("cookie err", e, flush=True)
         try:
             await page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=60000)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - FB stalls domcontentloaded on long-poll
             print("goto note:", type(e).__name__, flush=True)
         await page.wait_for_timeout(15000)
         d = json.loads(await page.evaluate(DUMP_JS))

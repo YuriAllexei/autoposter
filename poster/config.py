@@ -89,7 +89,6 @@ class Config:
     # "profile" = the PERSONAL login itself. Acting identity is read from
     # the `av` param on /api/graphql requests (see poster/fb.py:identity_ok).
     post_as: str = "page"
-    fb_lang: str = "es"
 
     post_text_file: Path = field(default=Path("data/post.txt"))
     photos_dir: Path = field(default=Path("data/car_photos"))
@@ -108,16 +107,36 @@ class Config:
 
     log_dir: Path = field(default=Path(".local-capture/logs"))
     screenshot_dir: Path = field(default=Path(".local-capture/shots"))
-    dump_on_error: bool = True
 
     # ---- monitoring (see poster/results.py, poster/notify.py) ----
     ledger_file: Path = field(
         default=Path(".local-capture/results/ledger.jsonl"))
     discord_webhook_url: str = ""
 
-    @property
-    def repo_root(self) -> Path:
-        return REPO_ROOT
+    def __post_init__(self) -> None:
+        """The user-rule guards live HERE, not in the loader: no Config —
+        from .env, tests or direct construction — may carry an unknown
+        identity mode or a wait past the caps."""
+        if self.post_as not in ("page", "profile"):
+            raise ValueError(
+                f"invalid AP_POST_AS={self.post_as!r} (use 'page' or 'profile')")
+        if self.delay_min < 0 or self.delay_max < self.delay_min:
+            raise ValueError(
+                f"invalid delay config: AP_DELAY_MIN_SECONDS={self.delay_min} "
+                f"AP_DELAY_MAX_SECONDS={self.delay_max} (need 0 <= min <= max)")
+        # HARD cap (user rule): no general wait exceeds MAX_ALLOWED_DELAY,
+        # whatever .env says. Always leaves a random spread.
+        self.delay_max = min(self.delay_max, MAX_ALLOWED_DELAY)
+        if self.delay_min >= self.delay_max:
+            self.delay_min = max(0.0, self.delay_max - 4.0)
+        if (self.group_switch_min < 0
+                or self.group_switch_max < self.group_switch_min):
+            raise ValueError(
+                f"invalid group-switch config: AP_GROUP_SWITCH_MIN_SECONDS="
+                f"{self.group_switch_min} AP_GROUP_SWITCH_MAX_SECONDS="
+                f"{self.group_switch_max} (need 0 <= min <= max)")
+        self.group_switch_max = min(self.group_switch_max, MAX_ALLOWED_GROUP_SWITCH)
+        self.group_switch_min = min(self.group_switch_min, self.group_switch_max)
 
     @property
     def identity_label(self) -> str:
@@ -152,7 +171,6 @@ def load_config(env_file: Path | None = None) -> Config:
         fb_posting_profile_name=(get("AP_FB_POSTING_PROFILE_NAME") or "Carmazon").strip(),
         fb_main_profile_name=(get("AP_FB_MAIN_PROFILE_NAME") or "").strip(),
         post_as=(get("AP_POST_AS") or "page").strip().lower(),
-        fb_lang=(get("AP_FB_LANG") or "es").strip().lower(),
         post_text_file=_as_path(get("AP_POST_TEXT_FILE"), "data/post.txt"),
         photos_dir=_as_path(get("AP_PHOTOS_DIR"), "data/car_photos"),
         photo_extensions=tuple(
@@ -169,29 +187,8 @@ def load_config(env_file: Path | None = None) -> Config:
         type_delay_max_ms=_as_int(get("AP_TYPE_DELAY_MAX_MS"), 90),
         log_dir=_as_path(get("AP_LOG_DIR"), ".local-capture/logs"),
         screenshot_dir=_as_path(get("AP_SCREENSHOT_DIR"), ".local-capture/shots"),
-        dump_on_error=_as_bool(get("AP_DUMP_ON_ERROR"), True),
         ledger_file=_as_path(get("AP_LEDGER_FILE"),
                              ".local-capture/results/ledger.jsonl"),
         discord_webhook_url=(get("AP_DISCORD_WEBHOOK_URL") or "").strip(),
     )
-    if cfg.post_as not in ("page", "profile"):
-        raise ValueError(
-            f"invalid AP_POST_AS={cfg.post_as!r} (use 'page' or 'profile')")
-    if cfg.delay_min < 0 or cfg.delay_max < cfg.delay_min:
-        raise ValueError(
-            f"invalid delay config: AP_DELAY_MIN_SECONDS={cfg.delay_min} "
-            f"AP_DELAY_MAX_SECONDS={cfg.delay_max} (need 0 <= min <= max)"
-        )
-    # HARD cap (user rule): no wait in this project exceeds MAX_ALLOWED_DELAY,
-    # regardless of what .env says. Always leaves a random spread.
-    cfg.delay_max = min(cfg.delay_max, MAX_ALLOWED_DELAY)
-    if cfg.delay_min >= cfg.delay_max:
-        cfg.delay_min = max(0.0, cfg.delay_max - 4.0)
-    if cfg.group_switch_min < 0 or cfg.group_switch_max < cfg.group_switch_min:
-        raise ValueError(
-            f"invalid group-switch config: AP_GROUP_SWITCH_MIN_SECONDS="
-            f"{cfg.group_switch_min} AP_GROUP_SWITCH_MAX_SECONDS="
-            f"{cfg.group_switch_max} (need 0 <= min <= max)")
-    cfg.group_switch_max = min(cfg.group_switch_max, MAX_ALLOWED_GROUP_SWITCH)
-    cfg.group_switch_min = min(cfg.group_switch_min, cfg.group_switch_max)
     return cfg
