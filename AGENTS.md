@@ -120,7 +120,8 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
    recording/dry-run. `AP_DRY_RUN=true` is default and fail-safe.
 7. MONITORING: exactly ONE Discord summary per run, sent only after it ends
    (success/failure/abort/crash all notify). Dry-run stages never count as
-   published; `skipped` never counts. Webhook failure never changes rc.
+   published; `skipped` never counts. Webhook failure never changes rc. A real publish carries a best-effort `delivered` verdict
+  (pending|live|unknown) — see verify_pending; it never gates the status.
 8. CROSSPOST TRACKING (user spec 2026-09-23): the batch plan is computed from
    the dialog's OWN group list each time it opens; the only memory is a set
    of already-batched group ids FOR THE CURRENT LISTING IN THE CURRENT RUN.
@@ -212,5 +213,9 @@ for an unseen composer LAYOUT, never per group.
 - All knobs in `.env` (`AP_` prefix, see `.env.example`; real env always wins,
   `AP_ENV_FILE` relocates the file). `.env`, `.local-capture/**`, and
   `data/car_photos/**` images are gitignored.
-- Next up the roadmap: scheduler + delivery verification (parse
-  my_pending_content so "published" can mean admin-approved).
+- Delivery verification PARTIALLY landed: live publishes now run
+  `verify_pending`, which checks my_pending_content then the group feed and
+  stamps the ledger row `delivered: pending|live|unknown` (shown as the
+  "live?" dashboard column + a Discord suffix). A failed verdict NEVER turns
+  a publish into a failure. Still open: a scheduled re-check that flips an
+  old "pending" to "live" once admins approve, and a cron scheduler.

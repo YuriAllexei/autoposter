@@ -111,6 +111,10 @@ class GroupResult:
     group_id: str
     status: str
     error: str | None = None
+    #: did the post actually go LIVE? "pending" (admin queue), "live"
+    #: (visible in the feed), "unknown" (verify could not tell). None on
+    #: staged/failed/skipped rows — verification only applies to publishes.
+    delivered: str | None = None
 
 
 @dataclass
@@ -177,13 +181,19 @@ class RunRecorder:
         with self.ledger_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
 
-    def record(self, group: dict, ok: bool, error: str | None = None) -> GroupResult:
+    def record(self, group: dict, ok: bool, error: str | None = None,
+               delivered: str | None = None) -> GroupResult:
+        """delivered: verify's verdict — recorded only on real publishes
+        (a staged dry run never went anywhere to verify)."""
         if ok:
             status = STATUS_STAGED if self.dry_run else STATUS_PUBLISHED
         else:
             status = STATUS_FAILED
+        if not ok or self.dry_run:
+            delivered = None
         name, gid = normalize_group(group)
-        res = GroupResult(name=name, group_id=gid, status=status, error=error)
+        res = GroupResult(name=name, group_id=gid, status=status,
+                          error=error, delivered=delivered)
         self.results.append(res)
         self._append_ledger(res)
         return res
@@ -206,6 +216,8 @@ class RunRecorder:
             "group_id": res.group_id, "name": res.name,
             "status": res.status, "error": res.error, "dry_run": self.dry_run,
         }
+        if res.delivered:
+            line["delivered"] = res.delivered
         with self.ledger_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
 

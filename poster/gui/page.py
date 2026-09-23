@@ -75,17 +75,28 @@ PAGE_HTML = """<!DOCTYPE html>
   .stat span { color:var(--dim); font-size:11px; text-transform:uppercase; }
   .note { color:var(--dim); font-size:12px; margin-top:8px; }
   .err { color:var(--bad); }
+  .ok { color:var(--ok); }
+  .warn { color:var(--warn); }
+  .head-flex { display:flex; gap:18px; justify-content:space-between;
+               align-items:flex-start; flex-wrap:wrap; }
+  .hint-box { text-align:right; max-width:430px; margin:2px 0 0;
+              line-height:1.6; }
+  tbody tr:hover { background:#1a1e27; }
+  td { font-variant-numeric:tabular-nums; }
+  .card { box-shadow:0 1px 3px rgba(0,0,0,.28); }
 </style>
 </head>
 <body>
 <header>
+<div class="head-flex">
+<div>
   <h1>autoposter · local control <span class="pill" id="ident">…</span>
       <span class="pill" id="mode">…</span></h1>
   <div class="row" id="controls">
     <button id="b-dry-groups">Dry run · groups</button>
     <button id="b-dry-cross">Dry run · crosspost</button>
     <button id="b-refresh-groups">Refresh groups (read-only)</button>
-    <button id="b-refresh-listings" disabled title="no listings CLI exists yet">Refresh listings</button>
+    <button id="b-refresh-listings">Refresh listings</button>
     <input type="text" id="confirm" placeholder="type PUBLICAR" autocomplete="off"
            spellcheck="false" aria-label="live confirmation phrase">
     <button class="danger" id="b-live-groups">LIVE · groups</button>
@@ -93,10 +104,17 @@ PAGE_HTML = """<!DOCTYPE html>
     <button class="danger" id="b-kill">Kill run</button>
     <span class="pill" id="runstate">idle</span>
   </div>
-  <div class="note" id="hint">Live buttons need the phrase
-    <b class="mono">PUBLICAR</b> typed in the box; a live run also needs
-    <span class="mono">AP_DRY_RUN=false</span> in .env (the CLI refuses otherwise).</div>
   <div class="note err" id="action"></div>
+</div>
+  <div class="note hint-box" id="hint">
+    live buttons: type <b class="mono">PUBLICAR</b> in the box AND set
+    <span class="mono">AP_DRY_RUN=false</span> in .env<br>
+    <b>dry</b> = test run: composer staged/screenshot, nothing published ·
+    <b>rc</b> = run exit code (0 ok · 1 nothing posted · 2 login · 3 identity)<br>
+    <b>live?</b> = after a publish: <span class="ok">✓ visible</span> in the
+    feed · <span class="warn">⏳ pending</span> admin review · ❔ couldn't tell
+  </div>
+</div>
 </header>
 
 <div class="wrap">
@@ -111,7 +129,8 @@ PAGE_HTML = """<!DOCTYPE html>
       <h2>Joined groups &amp; rotation</h2>
       <div class="scroll"><table id="groups">
         <thead><tr><th>next</th><th>group id</th><th>name</th>
-          <th>last attempt</th><th>status</th><th>pub.</th><th>att.</th></tr></thead>
+          <th>last attempt</th><th>status</th><th>live?</th>
+          <th>pub.</th><th>att.</th></tr></thead>
         <tbody></tbody></table></div>
       <div class="note" id="groupsnote"></div>
     </div>
@@ -252,6 +271,11 @@ function renderState(st) {
     td(tr, fmtTs(row.last_ts), "mono");
     const cell = td(tr, row.last_status || "never");
     cell.className = "pill " + statusClass(row.last_status);
+    const dv = { live: ["✓ visible", "ok"], pending: ["⏳ pending", "warn"],
+                 unknown: ["❔ unknown", "dim"] }[row.delivered]
+              || ["—", "dim"];
+    const dcell = td(tr, dv[0]);
+    dcell.className = dv[1];
     td(tr, row.published, "num");
     td(tr, row.attempts, "num");
   }, g.available ? "no joined groups in this snapshot (confirmed empty)"
@@ -276,7 +300,7 @@ function renderState(st) {
                  : "not fetched yet — no listings.json on disk");
   text($("listingsnote"),
     l.available ? ("snapshot " + fmtTs(l.fetched_at) + " · " + l.count + " active listings")
-                : "not fetched yet — poster.listings has no CLI yet, so this dashboard cannot refresh it");
+                : "not fetched yet — press Refresh listings to fetch it");
 
   // runs table
   fillTable("runs", (st.runs || {}).recent || [], (row, tr) => {

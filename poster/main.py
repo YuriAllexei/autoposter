@@ -108,9 +108,37 @@ async def composer_gate(page, timeout_s: float = 5.0) -> tuple[bool, str]:
     return False, ""
 
 
-async def verify_pending(page, group_url: str, cfg: Config, log) -> None:
-    """[proven path] group posts go through admin approval -> check
-    /groups/<id>/my_pending_content/ and save evidence screenshot."""
+#: verdicts for "did the post actually go live?" (delivered= in the ledger)
+PENDING = "pending"
+LIVE = "live"
+UNKNOWN = "unknown"
+
+
+def _folded(text: str) -> str:
+    """Whitespace-folded + casefolded haystack — what DOM text probes
+    compare against (FB inserts newlines/spaces unpredictably)."""
+    return " ".join((text or "").split()).casefold()
+
+
+def post_snippet(post_text: str) -> str:
+    """The most distinctive short string of our post: its first non-empty
+    line, folded, capped at 120 chars. Pure -> testable."""
+    for line in (post_text or "").splitlines():
+        s = line.strip()
+        if s:
+            return _folded(s)[:120]
+    return ""
+
+
+async def verify_pending(page, group_url: str, cfg: Config, log,
+                         snippet: str = "") -> str:
+    """[proven path] group posts go through admin approval -> decide whether
+    OUR post sits in /groups/<id>/my_pending_content/ (=> "pending"), or is
+    already in the group feed (=> "live"), saving evidence either way.
+
+    Best-effort by design: ANY failure answers "unknown" — verification must
+    never turn a real publish into a failure (AGENTS rule 7: published is
+    published; the verdict only decorates the ledger row)."""
     pending = group_url.rstrip("/") + "/my_pending_content/"
     await human_sleep(cfg, log, "pending-content check")
     try:
@@ -120,15 +148,36 @@ async def verify_pending(page, group_url: str, cfg: Config, log) -> None:
         await page.wait_for_timeout(random.uniform(2000, 4000))
         shot = await dump_evidence(page, cfg.screenshot_dir, "pending_content")
         log(f"verify: pending-content page captured -> {shot}")
+        if snippet:
+            body = _folded(str(await page.evaluate("document.body.innerText")
+                                or ""))
+            if snippet.casefold() in body:
+                log("verify: post found in PENDING queue -> awaiting admins")
+                return PENDING
+            # not pending: it may already have been approved into the feed
+            await page.goto(group_url, wait_until="domcontentloaded",
+                            timeout=60000)
+            await page.wait_for_timeout(random.uniform(2000, 4000))
+            feed = _folded(str(await page.evaluate("document.body.innerText")
+                                or ""))
+            if snippet.casefold() in feed:
+                log("verify: post visible in group FEED -> live")
+                return LIVE
+            log("verify: post neither pending nor visible in first feed "
+                "screen — verdict unknown")
+            return UNKNOWN
     except Exception as e:
-        log(f"verify: could not open {pending}: {type(e).__name__}")
+        log(f"verify: could not check {pending}: {type(e).__name__}")
+    return UNKNOWN
 
 
 async def run_group(
     page, group: dict, post: Post, cfg: Config, log
 ) -> tuple[str, str | None]:
     """One target group. Returns ('posted'|'skipped'|'failed', error).
-    group = a live-joined record {id, name, url} from poster.groups_fetch."""
+    group = a live-joined record {id, name, url} from poster.groups_fetch.
+    The 3rd element is the delivery verdict (PENDING/LIVE/UNKNOWN) for real
+    publishes; None on every other outcome (nothing was out there to find)."""
     url = group["url"]
     log(f"[group] {group['name']} -> {url}")
     goto_err: str | None = None
@@ -144,7 +193,7 @@ async def run_group(
             # AGENTS rule 4: "skipped" MEANS composer-not-enabled. A dead
             # navigation is an ERROR — never record it as not-postable.
             log("[group] FAIL goto broke AND no composer rendered")
-            return FAILED, f"goto failed ({goto_err}); composer never seen"
+            return FAILED, f"goto failed ({goto_err}); composer never seen", None
         log(f"[group] skip: composer trigger never rendered (5s gate){gate_why}")
         try:
             shot = await dump_evidence(page, cfg.screenshot_dir, "no_composer",
@@ -152,7 +201,7 @@ async def run_group(
             log(f"[group] skip evidence: {shot}")
         except Exception:
             pass
-        return SKIPPED, f"no composer within 5s{gate_why}"
+        return SKIPPED, f"no composer within 5s{gate_why}", None
     await page.evaluate("window.scrollTo(0, 0)")
     await page.wait_for_timeout(2000)
     try:
@@ -163,10 +212,11 @@ async def run_group(
             await page.keyboard.press("Escape")  # close composer, leave nothing staged
         except Exception:
             pass
-        return FAILED, f"flow_error: {e}"
-    if not cfg.dry_run:
-        await verify_pending(page, url, cfg, log)
-    return POSTED, None
+        return FAILED, f"flow_error: {e}", None
+    if cfg.dry_run:
+        return POSTED, None, None                     # staged — nothing to verify
+    verdict = await verify_pending(page, url, cfg, log, post_snippet(post.text))
+    return POSTED, None, verdict
 
 
 def make_finish(cfg: Config, recorder: RunRecorder):
@@ -262,9 +312,10 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
             # before the 1st group
             await human_sleep(cfg, log, "first group")
             for idx, group in enumerate(planned):
-                status, err = await run_group(page, group, post, cfg, log)
+                status, err, delivered = await run_group(
+                    page, group, post, cfg, log)
                 if status == POSTED:
-                    recorder.record(group, True)
+                    recorder.record(group, True, delivered=delivered)
                     ok += 1
                 elif status == SKIPPED:
                     recorder.record_skipped(group, err or "no composer")

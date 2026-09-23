@@ -20,6 +20,10 @@ pytest.importorskip("playwright")  # main.py imports it at module level
 
 from poster import fb as mfb
 from poster import main as m
+
+# the harness patches m.verify_pending for flow tests; keep a handle
+# to the real function for its own unit test
+REAL_VERIFY_PENDING = m.verify_pending
 from poster import notify
 from poster.config import Config
 
@@ -118,7 +122,7 @@ def _make_harness(tmp_path, monkeypatch, *, dry=False, joined=None):
     async def no_sleep(cfg_, log, why="", *args, **kwargs):
         return None
 
-    async def no_verify(page, url, cfg_, log):
+    async def no_verify(*_a, **_k):
         return None
 
     async def no_evidence(page, dir_, tag, html="", extra=None):
@@ -131,7 +135,11 @@ def _make_harness(tmp_path, monkeypatch, *, dry=False, joined=None):
     monkeypatch.setattr(m, "dump_evidence", no_evidence)
 
     def install_run_group(result):
+        """result = (status, err) or (status, err, delivered) — the 3rd is
+        run_group's delivery verdict ("" / None on legacy 2-tuples)."""
         async def fake_run_group(page, group, post, cfg_, log):
+            if len(result) == 2:
+                return result[0], result[1], None
             return result
         monkeypatch.setattr(m, "run_group", fake_run_group)
 
@@ -154,6 +162,62 @@ def _install_boom(monkeypatch):
         raise RuntimeError("kaput")
     monkeypatch.setattr(m, "run_group", boom)
 
+
+
+def test_delivery_verdict_lands_in_ledger_and_discord(tmp_path, monkeypatch):
+    """LIVE publish + verify verdict -> the ledger row carries `delivered`
+    and the Discord line says pending/visible; a failed group never does."""
+    cfg, posts, install = _make_harness(tmp_path, monkeypatch)
+    install(("posted", None, "pending"))
+    rc = asyncio.run(m.main_async(cfg, None))
+    assert rc == 0
+    line = next(x for x in _ledger_lines(cfg) if x["status"] == "published")
+    assert line["delivered"] == "pending"
+    assert "pending admin review" in _desc(posts[0])
+
+
+def test_dry_run_publish_never_carries_a_delivered_field(tmp_path, monkeypatch):
+    cfg, _posts, install = _make_harness(tmp_path, monkeypatch)
+    cfg.dry_run = True
+    install(("posted", None, "pending"))     # would-be verdict must be dropped
+    assert asyncio.run(m.main_async(cfg, None)) == 0
+    line = _ledger_lines(cfg)[-1]
+    assert line["status"] == "staged"
+    assert "delivered" not in line
+
+
+def test_post_snippet_purity():
+    snip = m.post_snippet("\n\n  🚗 2019 Chevrolet TAHOE LT — $340.000\nmore\n")
+    assert snip == "🚗 2019 chevrolet tahoe lt — $340.000"[:120]
+    assert m.post_snippet("") == ""
+    assert m.post_snippet("a\tb\nc") == "a b"
+
+
+def test_verify_pending_verdicts(tmp_path, monkeypatch):
+    """pending-page text decides first; absence falls through to the feed."""
+    cfg, _posts, _install = _make_harness(tmp_path, monkeypatch)
+
+    class VPage:
+        def __init__(self, pending_text, feed_text):
+            self.pending_text, self.feed_text = pending_text, feed_text
+            self.url = ""
+        async def goto(self, url, **kw):
+            self.url = url
+        async def wait_for_timeout(self, ms):
+            pass
+        async def evaluate(self, expr):
+            return self.pending_text if "pending_content" in self.url \
+                else self.feed_text
+
+    async def v(page, url):
+        return await REAL_VERIFY_PENDING(page, url, cfg, lambda *_: None,
+                                      "tahoe lt")
+
+    assert asyncio.run(v(VPage("… 2019 Chevrolet TAHOE LT …", ""), "u")) \
+        == m.PENDING
+    assert asyncio.run(v(VPage("nothing here", "yes: tahoe lt 2019"), "u")) \
+        == m.LIVE
+    assert asyncio.run(v(VPage("no", "nope"), "u")) == m.UNKNOWN
 
 def test_live_run_records_published_and_notifies_once(tmp_path, monkeypatch):
     cfg, posts, install = _make_harness(tmp_path, monkeypatch)
@@ -218,7 +282,7 @@ def test_rotation_prefers_never_attempted_group(tmp_path, monkeypatch):
 
     async def spy_run_group(page, group, post, cfg_, log):
         seen.append(group["id"])
-        return "posted", None
+        return "posted", None, None
     monkeypatch.setattr(m, "run_group", spy_run_group)
     rc = asyncio.run(m.main_async(cfg, None))
     assert rc == 0

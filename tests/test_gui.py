@@ -835,3 +835,35 @@ def test_live_server_tolerates_a_malformed_body(live_server):
     base, _manager, _buffer = live_server
     status, data = _post(base + "/api/run", None, raw="{not json")
     assert status == 400 and "unknown mode" in data["error"]
+
+
+# ---- delivery verdict plumbing ("did it go live?") ----
+
+def test_ledger_line_carries_delivered_and_rollup_surfaces_it(tmp_path):
+    from poster.gui import state as st
+    lines = [
+        ('{"run_id":"r1","ts":"2026-09-23T01:00:00+00:00","group_id":"g1",'
+         '"name":"G1","status":"published","error":null,"dry_run":false}'),
+        ('{"run_id":"r2","ts":"2026-09-23T03:00:00+00:00","group_id":"g1",'
+         '"name":"G1","status":"published","error":null,"dry_run":false,'
+         '"delivered":"pending"}'),
+        ('{"run_id":"r3","ts":"2026-09-23T04:00:00+00:00","group_id":"g1",'
+         '"name":"G1","status":"failed","error":"boom","dry_run":false}'),
+    ]
+    led = tmp_path / "ledger.jsonl"
+    led.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    parsed = st.read_ledger(led)
+    assert parsed[0].delivered is None and parsed[1].delivered == "pending"
+    roll = st.group_rollup(parsed)
+    # the verdict travels with the newest PUBLISH — a later failure must
+    # not erase that the post itself is awaiting review
+    assert roll["g1"]["delivered"] == "pending"
+    assert roll["g1"]["last_status"] == "failed"
+
+
+def test_page_shows_live_column_and_legend():
+    from poster.gui.page import render_page
+    html = render_page()
+    assert "<th>live?</th>" in html
+    assert "test run" in html and "exit code" in html
+    assert "head-flex" in html                  # hint lives in the header row

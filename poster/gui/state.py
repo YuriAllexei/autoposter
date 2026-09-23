@@ -156,6 +156,9 @@ class LedgerLine:
     group_ids: list[str]
     group_names: list[str]
     count: int | None
+    # delivery verdict on real publishes: "live" | "pending" | "unknown"
+    # (None on every other row) — the dashboard's "live?" column
+    delivered: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -165,6 +168,7 @@ class LedgerLine:
             "listing_id": self.listing_id, "listing_title": self.listing_title,
             "batch": self.batch, "group_ids": self.group_ids,
             "group_names": self.group_names, "count": self.count,
+            "delivered": self.delivered,
         }
 
 
@@ -208,6 +212,8 @@ def parse_ledger_line(raw: str) -> LedgerLine | None:
         group_ids=_as_list(rec.get("group_ids")),
         group_names=_as_list(rec.get("group_names")),
         count=_as_int(rec.get("count")),
+        delivered=(None if rec.get("delivered") in (None, "")
+                   else _as_str(rec["delivered"])),
     )
 
 
@@ -341,13 +347,17 @@ def group_rollup(lines: list[LedgerLine]) -> dict[str, dict[str, Any]]:
             "group_id": line.group_id, "name": line.name, "last_ts": "",
             "last_status": "", "last_error": None, "last_run_id": "",
             "attempts": 0, "published": 0, "staged": 0, "failed": 0,
-            "skipped": 0, "dry_runs": 0,
+            "skipped": 0, "dry_runs": 0, "delivered": "",
         })
         row["attempts"] += 1
         if line.status in ("published", "staged", "failed", "skipped"):
             row[line.status] = row.get(line.status, 0) + 1
         if line.dry_run:
             row["dry_runs"] += 1
+        if line.status == "published" and line.delivered:
+            # verdict travels with the NEWEST publish (a failed later
+            # attempt does not invalidate what is already visible)
+            row["delivered"] = line.delivered
         if line.ts >= row["last_ts"]:
             row["last_ts"] = line.ts
             row["last_status"] = line.status
@@ -462,6 +472,7 @@ def build_state(paths: GuiPaths, identity: dict[str, Any] | None = None,
         row["last_error"] = roll.get("last_error")
         row["attempts"] = roll.get("attempts", 0)
         row["published"] = roll.get("published", 0)
+        row["delivered"] = roll.get("delivered", "")
         # a group whose last attempt found no composer is (currently) not
         # postable for this identity — the marketplace case in AGENTS.md
         row["postable"] = row["last_status"] != STATUS_SKIPPED

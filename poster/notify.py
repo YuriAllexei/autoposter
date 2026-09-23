@@ -41,7 +41,11 @@ def build_payload(summary: dict, profile_name: str = "") -> dict:
         elif dry:
             lines.append(f"🧪 {name} — composer staged, NOT published")
         else:
-            lines.append(f"✅ {name} — all-time published: "
+            verdict = {"pending": " · ⏳ pending admin review",
+                       "live": " · 🟢 visible",
+                       "unknown": " · ❔ visibility unverified"}.get(
+                           str(g.get("delivered") or ""), "")
+            lines.append(f"✅ {name}{verdict} — all-time published: "
                          f"{totals.get(str(g['group_id']), 0)}")
     title = (
         f"autoposter · {profile_name or 'autoposter'} · "
