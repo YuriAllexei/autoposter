@@ -182,8 +182,17 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
   `__relay_internal__pv__ShouldUpdate...relayprovider=false` provided
   variable (FB errors missing_required_variable_value without it — the
   JSONL recorder SCRUBBED its name, the trace did not). The feed only shows
-  ACTIVE listings and the selling page renders each card TWICE → dedupe by
-  folded title; cards (not the feed) are the publish set.
+  ACTIVE listings ("Todas las publicaciones") and the page renders each
+  card TWICE → dedupe by folded title; the planned set = cards ∩ feed titles
+  (USER RULE: 'Requieren atencion' cards are never cross-posted; if the feed
+  breaks, degrade loudly to all-cards, never abort on metadata).
+- PUBLISH step (recording 20260923T042928Z, captured LIVE): clicking
+  'Publicar' fires `MarketplaceForSaleItemCreateXPostsMutation`
+  doc_id=9628145373942390 (input: item_id, additional_target_ids=[group
+  ids], actor_id, client_mutation_id, attribution_id_v2) and the dialog
+  just CLOSES — no confirmation UI. Row clicks are TOGGLES (a double click
+  nets to zero — never assume, read aria-checked back). Suggested-groups
+  rows ('Grupos sugeridos') have no checkbox → unreachable by design.
 - Crosspost reaches the groups the TEXT pipeline must skip: 'Vender algo'
   marketplace-tab groups still appear in the crosspost dialog.
 

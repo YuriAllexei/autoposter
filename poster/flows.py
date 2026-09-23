@@ -534,7 +534,17 @@ async def finish_crosspost_dialog(page: Page, publish: bool, cfg: Config,
                                   log: log_fn = print) -> str:
     """Dry-run: screenshot the fully-checked dialog, then Cancelar and verify
     it is gone (NOTHING submitted — the probe closed every dialog this way).
-    Live: screenshot first, then Publicar, then the dialog MUST disappear."""
+    Live: screenshot first, then Publicar, then the dialog MUST disappear.
+
+    [proven LIVE 2026-09-23, recording 20260923T042928Z]: the click fires
+    ONE request — MarketplaceForSaleItemCreateXPostsMutation
+    doc_id=9628145373942390, input {item_id, additional_target_ids =
+    selected group ids, actor_id, listing_email_id:null, client_mutation_id,
+    attribution_id_v2} -> data.for_sale_item_create_xposts.item. Then the
+    dialog is simply GONE (no confirmation UI; user clicked the page behind
+    it 9 s later). We keep the DOM route: FB validates the selection
+    client-side and the attribution token is minted by the app — a direct
+    mutation replay would be guesswork, this path is observed truth."""
     staged_shot = await dump_evidence(page, cfg.screenshot_dir, "crosspost_staged")
     if publish:
         btn = page.get_by_role("button", name=CROSSPOST_PUBLISH, exact=True)

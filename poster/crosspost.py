@@ -209,6 +209,29 @@ async def main_async(cfg: Config, args) -> int:
                 log(f"[xpost] deduped {len(titles)} cards -> {len(uniq)} "
                     "distinct listing(s)")
             titles = uniq
+
+            #: USER RULE (2026-09-23 recording notes): "Requieren atencion"
+            #: listings are NOT ours to publish — only the active feed
+            #: ("Todas las publicaciones"). Cards stay the anchor (we click
+            #: them), but a card whose title is absent from the feed is
+            #: skipped. If the feed itself broke we degrade loudly to
+            #: all-cards rather than silently narrowing the run's scope.
+            if feed:
+                feed_titles = {str(l.get("title", "")).casefold()
+                               for l in feed}
+                keep = [t for t in titles if t.casefold() in feed_titles]
+                for t in titles:
+                    if t not in keep:
+                        log(f"[xpost] skip card {t[:44]!r} — not in the "
+                            "active feed ('Requieren atencion'?)")
+                if not keep:
+                    finish("run aborted: no card matches an active-feed "
+                           "listing (flagged-only account?)")
+                    return 1
+                titles = keep
+            else:
+                log("[xpost] WARNING: active feed unavailable — running "
+                    "with ALL cards incl. possible 'Requieren atencion'")
             if not titles:
                 log("abort: no listing cards rendered on the selling page")
                 finish("run aborted: no listing cards on "

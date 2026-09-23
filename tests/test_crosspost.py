@@ -418,3 +418,49 @@ def test_cli_dry_flag_always_wins(tmp_path):
     finally:
         mod.main_async = old
     assert rc == 0 and seen["dry"] is True
+
+
+def test_main_async_skips_flagged_cards(tmp_path, monkeypatch):
+    """USER RULE (2026-09-23 recording notes): a card absent from the ACTIVE
+    feed ('Requieren atencion') is never cross-posted — the planned set is
+    cards ∩ feed, cards only as the clickable anchor."""
+    feed = [{"id": "L1", "title": "Tahoe", "price": "$340.000"},
+            {"id": "L1", "title": "Tahoe", "price": "$340.000"}]  # dup card
+    _stub_entry(monkeypatch, ["Tahoe", "Tahoe", "Sony XM5", "Sony XM5"],
+                feed)
+    groups = [{"id": "g1", "name": "G1"}]
+    fake = FakeDialog(groups, listing_id="L1")
+    _install(monkeypatch, fake)
+    cfg = _cfg(tmp_path)
+
+    class Args:
+        list = False
+        max = 0
+        listing: list = None
+
+    rc = asyncio.run(cx.main_async(cfg, Args()))
+    assert rc == 0
+    assert fake.batches_seen == [["g1"]]
+    ids = [json.loads(x)["listing_id"] for x in
+           cfg.ledger_file.read_text(encoding="utf-8").splitlines()]
+    assert ids == ["L1"]     # 'Sony XM5' never touched
+
+
+def test_main_async_feed_without_any_card_match_aborts(tmp_path, monkeypatch):
+    """Feed alive but NO card matches it (weird drift): abort rc 1 loudly
+    instead of clicking flagged-only listings."""
+    _stub_entry(monkeypatch, ["Sony XM5"],
+                [{"id": "L1", "title": "Tahoe", "price": "$0"}])
+    groups = [{"id": "g1", "name": "G1"}]
+    fake = FakeDialog(groups)
+    _install(monkeypatch, fake)
+    cfg = _cfg(tmp_path)
+
+    class Args:
+        list = False
+        max = 0
+        listing: list = None
+
+    rc = asyncio.run(cx.main_async(cfg, Args()))
+    assert rc == 1
+    assert fake.opens == 0   # no dialog attempted
