@@ -308,6 +308,28 @@ class RunManager:
         self.buffer.append(f"[gui] {utc_stamp()} kill requested (pid {pid})")
         return True
 
+    def shutdown(self, *, timeout: float = 8.0) -> bool:
+        """Kill the WHOLE dashboard footprint: SIGTERM the running child's
+        process group (playwright driver + browser included), wait, escalate
+        to SIGKILL if it ignores the polite one. Returns True when a run was
+        actually in flight. The Ctrl-C path in __main__ calls this — closing
+        the terminal must never orphan a posting browser."""
+        killed = self.kill()
+        if not killed:
+            return False
+        if not self.wait_idle(timeout):
+            proc = self._proc
+            pid = getattr(proc, "pid", None) if proc else None
+            try:
+                if pid:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                    self.buffer.append(f"[gui] {utc_stamp()} SIGKILL group "
+                                       f"{pid} (child ignored SIGTERM)")
+            except OSError:
+                pass
+            self.wait_idle(2.0)
+        return True
+
     def wait_idle(self, timeout: float | None = 5.0) -> bool:
         """Block until the current run's reader thread exits (True) or the
         timeout lapses (False). Used by /api/kill and by tests."""

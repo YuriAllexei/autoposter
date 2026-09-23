@@ -11,6 +11,7 @@ Mirrors `poster.main`'s conventions: argparse, config loaded from .env via
 from __future__ import annotations
 
 import argparse
+import signal
 import subprocess
 import sys
 import webbrowser
@@ -23,6 +24,13 @@ from .server import create_server
 from .state import GuiPaths, identity_view
 
 DEFAULT_PORT = 8765
+
+
+def _term_to_int(signum: int, frame: object) -> None:
+    """`kill <pid>` (default SIGTERM) must reach the same shutdown path as
+    Ctrl-C — Python's default TERM handling skips finally blocks."""
+    raise KeyboardInterrupt
+
 
 
 def _on_wsl() -> bool:
@@ -88,15 +96,28 @@ def main(argv: list[str] | None = None) -> int:
           f"capture root {paths.capture_root}")
     print(f"[{stamp}] available modes: "
           + ", ".join(f"{m}={ok}" for m, ok in manager.available().items()))
-    print(f"[{stamp}] Ctrl-C to stop (runs already started keep their own "
-          "process group; use the Kill button to stop one)")
+    signal.signal(signal.SIGTERM, _term_to_int)
+    print(f"[{stamp}] Ctrl-C (or kill <pid>) stops the dashboard AND any "
+          "run still in flight (whole browser process tree)")
     if args.open_browser:
         print(f"[{stamp}] --open: browser via {open_in_browser(url)}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
+        # teardown must not be interruptible: a half-killed process group
+        # would orphan a headed Firefox and leave the profile locked
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         print(f"\n[{datetime.now(UTC).strftime('%H:%M:%S')}] shutting down")
     finally:
+        # USER REQUIREMENT (2026-09-23): exiting the dashboard must take
+        # everything related with it — an in-flight bot run is a child in
+        # its own session, so SIGINT from the terminal would NOT reach it
+        # and we would orphan a headed Firefox. shutdown() SIGTERMs the
+        # whole group (driver + browsers), waits, escalates to SIGKILL.
+        if manager.shutdown():
+            print(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] in-flight "
+                  "run killed (whole process group)")
         httpd.server_close()
     return 0
 

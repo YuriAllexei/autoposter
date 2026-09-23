@@ -352,6 +352,28 @@ def test_manager_streams_child_output_into_the_buffer(tmp_path):
     assert mgr.status()["running"] is False and mgr.status()["rc"] == 0
 
 
+def test_manager_shutdown_sigkills_stubborn_child(tmp_path, monkeypatch):
+    """A child ignoring SIGTERM must still die — an orphaned headed Firefox
+    would hold the one-owner profile lock forever."""
+    import subprocess as sp
+    import time
+
+    monkeypatch.setitem(runner_mod.MODE_SPECS, "stubborn", {
+        "module": "x", "dry_flag": "", "live_allowed": False,
+        "label": "stubborn run"})
+    proc = sp.Popen(["sh", "-c", "trap '' TERM; sleep 30"],
+                    start_new_session=True)
+    mgr = RunManager(tmp_path, RingBuffer(), probe=lambda m: True,
+                     popen=lambda cmd, **kw: proc)
+    mgr.start("stubborn", live=False)
+    assert mgr.shutdown(timeout=1.0) is True
+    for _ in range(60):
+        if proc.poll() is not None:
+            break
+        time.sleep(0.1)
+    assert proc.poll() is not None, "stubborn child survived SIGKILL escalation"
+
+
 def test_open_in_browser_prefers_windows_cmd_on_wsl(monkeypatch):
     import poster.gui.__main__ as gm
     calls = []
@@ -375,6 +397,52 @@ def test_open_in_browser_falls_back_when_cmd_missing(monkeypatch):
     monkeypatch.setattr(gm.webbrowser, "open", lambda u: opened.append(u) or True)
     assert "webbrowser" in gm.open_in_browser("http://x/")
     assert opened == ["http://x/"]
+
+
+def test_dashboard_exit_kills_the_inflight_run(monkeypatch):
+    """USER REQUIREMENT: Ctrl-C (KeyboardInterrupt from serve_forever) must
+    take the dashboard down AND terminate an in-flight bot run."""
+    import poster.gui.__main__ as gm
+    calls: list = []
+
+    class _Httpd:
+        server_address = ("127.0.0.1", 8765)
+        def serve_forever(self):
+            raise KeyboardInterrupt
+        def server_close(self):
+            calls.append("close")
+
+    class _Mgr:
+        def available(self):
+            return {"groups": True}
+        def shutdown(self, *, timeout: float = 8.0):
+            calls.append("kill")   # kill + wait + SIGKILL now live INSIDE
+            return True            # RunManager.shutdown (tested separately)
+
+    monkeypatch.setattr(gm, "RunManager", lambda *a, **k: _Mgr())
+    monkeypatch.setattr(gm, "create_server", lambda *a, **k: _Httpd())
+    #: main() INTENTIONALLY mutates the process signal handlers (SIGTERM ->
+    #: KeyboardInterrupt, teardown -> SIG_IGN). Restore them or EVERY later
+    #: Popen child inherits SIG_IGN (dispositions do!) and becomes unkillable
+    #: — that poisoned the real-signal kill test for exactly 5 seconds.
+    import signal as _sig
+    _saved = (_sig.getsignal(_sig.SIGINT), _sig.getsignal(_sig.SIGTERM))
+    try:
+        assert gm.main(["--port", "0"]) == 0
+    finally:
+        _sig.signal(_sig.SIGINT, _saved[0])
+        _sig.signal(_sig.SIGTERM, _saved[1])
+    assert calls == ["kill", "close"]
+
+
+def test_sigterm_walks_the_keyboardinterrupt_path():
+    import signal
+
+    import pytest
+
+    import poster.gui.__main__ as gm
+    with pytest.raises(KeyboardInterrupt):
+        gm._term_to_int(signal.SIGTERM, None)
 
 
 def test_child_clis_run_from_the_project_root_not_the_capture_root(tmp_path):
