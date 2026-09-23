@@ -115,6 +115,12 @@ class Config:
     crosspost_gap_max: float = 130.0
     #: 0 = every active listing per run (user decision: all in one run)
     crosspost_max_listings: int = 0
+    #: USER SPEC (2026-09-23): sleeps BETWEEN crosspost actions are their own
+    #: category — uniform 1-3s (not the 2-4s text-post range). Checkbox rows
+    #: inside the dialog get a faster 0.2-1s micro-pause (constant lives in
+    #: poster/flows.py; they are rapid human ticks, not actions).
+    crosspost_action_min: float = 1.0
+    crosspost_action_max: float = 3.0
 
     log_dir: Path = field(default=Path(".local-capture/logs"))
     screenshot_dir: Path = field(default=Path(".local-capture/shots"))
@@ -148,6 +154,17 @@ class Config:
                 f"{self.group_switch_max} (need 0 <= min <= max)")
         self.group_switch_max = min(self.group_switch_max, MAX_ALLOWED_GROUP_SWITCH)
         self.group_switch_min = min(self.group_switch_min, self.group_switch_max)
+        if (self.crosspost_action_min < 0
+                or self.crosspost_action_max < self.crosspost_action_min):
+            raise ValueError(
+                "invalid crosspost-action sleep config: "
+                "AP_CROSSPOST_ACTION_MIN_SECONDS="
+                f"{self.crosspost_action_min} AP_CROSSPOST_ACTION_MAX_SECONDS="
+                f"{self.crosspost_action_max} (need 0 <= min <= max)")
+        self.crosspost_action_max = min(self.crosspost_action_max,
+                                        MAX_ALLOWED_DELAY)
+        self.crosspost_action_min = min(self.crosspost_action_min,
+                                        self.crosspost_action_max)
         if (self.crosspost_gap_min < 0
                 or self.crosspost_gap_max < self.crosspost_gap_min):
             raise ValueError(
@@ -210,6 +227,10 @@ def load_config(env_file: Path | str | None = None) -> Config:
         crosspost_gap_min=_as_float(get("AP_CROSSPOST_GAP_MIN_SECONDS"), 110.0),
         crosspost_gap_max=_as_float(get("AP_CROSSPOST_GAP_MAX_SECONDS"), 130.0),
         crosspost_max_listings=_as_int(get("AP_CROSSPOST_MAX_LISTINGS"), 0),
+        crosspost_action_min=_as_float(
+            get("AP_CROSSPOST_ACTION_MIN_SECONDS"), 1.0),
+        crosspost_action_max=_as_float(
+            get("AP_CROSSPOST_ACTION_MAX_SECONDS"), 3.0),
         type_delay_min_ms=_as_int(get("AP_TYPE_DELAY_MIN_MS"), 30),
         type_delay_max_ms=_as_int(get("AP_TYPE_DELAY_MAX_MS"), 90),
         log_dir=_as_path(get("AP_LOG_DIR"), ".local-capture/logs"),

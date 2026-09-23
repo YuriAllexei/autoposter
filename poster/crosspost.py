@@ -273,7 +273,9 @@ async def main_async(cfg: Config, args) -> int:
                                          cfg.crosspost_gap_max)
                     log(f"[xpost] sleep {gap:.1f}s before next listing")
                     await asyncio.sleep(gap)
-                await human_sleep(cfg, log, "before listing dialog round")
+                await human_sleep(cfg, log, "before listing dialog round",
+                                  cfg.crosspost_action_min,
+                                  cfg.crosspost_action_max)
                 meta = feed_by_title.get(t.casefold()) or {}
                 await run_listing(page, cfg, recorder, t, log,
                                   known_id=str(meta.get("id") or ""))

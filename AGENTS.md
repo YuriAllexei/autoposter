@@ -108,7 +108,11 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
    before sensitive steps; operating range 2-4s and `Config.__post_init__`
    hard-caps general waits at 7s (no Config, however built, exceeds it).
    GROUP CHANGE is its own category: 10-15s (`AP_GROUP_SWITCH_*`, cap 20s)
-   after finishing one group, never after the last. NO sleep between photo
+   after finishing one group, never after the last.
+   CROSSPOST ACTIONS are their own category too (user spec 2026-09-23):
+   1-3s between menu/dialog actions (`AP_CROSSPOST_ACTION_*`) and 0.2-1s
+   micro-pauses BETWEEN consecutive group-checkbox clicks
+   (`flows.CROSSPOST_ROW_CLICK_DELAY`, constant on purpose). NO sleep between photo
    batches (settling = `_wait_upload_settled` condition-wait). Post text is
    PASTED (`execCommand('insertText')`, Enter per line) behind the 1:1
    read-back gate; char-by-char typing survives only as one-shot fallback.

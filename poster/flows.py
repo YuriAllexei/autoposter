@@ -353,6 +353,10 @@ CROSSPOST_MORE_PREFIX = "Más opciones para "
 #: in 'En tus grupos'; suggested rows are buttons — never targeted.
 CROSSPOST_ROW_SEL = '[role="dialog"] [role="checkbox"]'
 
+#: USER SPEC (2026-09-23): consecutive checkbox rows are clicked with a
+#: 0.2-1s micro-pause (rapid human ticking, NOT the 1-3s action sleeps).
+CROSSPOST_ROW_CLICK_DELAY = (0.2, 1.0)
+
 #: shared close-detector: the modal dialog is gone when no aria-modal
 #: [role=dialog] remains (probe 2026-09-23: FB removes the node / its flag)
 _DIALOG_GONE_JS = ("() => ![...document.querySelectorAll('[role=dialog]')]"
@@ -449,7 +453,8 @@ async def open_crosspost_dialog(page: Page, title: str, cfg: Config,
                             f"({len(hits)} folded matches). Evidence: {shot}")
         btn = hits[0]
 
-    await human_sleep(cfg, log, "before opening the listing '...' menu")
+    await human_sleep(cfg, log, "before opening the listing '...' menu",
+                      cfg.crosspost_action_min, cfg.crosspost_action_max)
     async with page.expect_response(_dialog_response_filter(),
                                     timeout=30000) as rinfo:
         await btn.click()
@@ -461,6 +466,8 @@ async def open_crosspost_dialog(page: Page, title: str, cfg: Config,
                                        "crosspost_menu_never_opened")
             raise FlowError(f"listing menu never rendered "
                             f"'{CROSSPOST_MENU_ITEM}'. Evidence: {shot}") from None
+        await asyncio.sleep(
+            random.uniform(*CROSSPOST_ROW_CLICK_DELAY))
         await item.first.click()
     resp = await rinfo.value
     try:
@@ -520,6 +527,8 @@ async def select_crosspost_groups(page: Page, groups: list,
                             f"({n} rows). Evidence: {shot}")
         picked.append(i)
     for pos, (i, g) in enumerate(zip(picked, groups, strict=True), 1):
+        if pos > 1:   # first click is immediate; humans pause BETWEEN ticks
+            await asyncio.sleep(random.uniform(*CROSSPOST_ROW_CLICK_DELAY))
         await rows.nth(i).click()
         if await rows.nth(i).get_attribute("aria-checked") != "true":
             shot = await dump_evidence(page, cfg.screenshot_dir,
@@ -551,7 +560,8 @@ async def finish_crosspost_dialog(page: Page, publish: bool, cfg: Config,
         if await btn.count() != 1 or not await btn.first.is_visible():
             raise FlowError(f"'{CROSSPOST_PUBLISH}' button not unique/visible "
                             f"({await btn.count()}) — refusing to guess-click")
-        await human_sleep(cfg, log, "all groups checked -> Publicar")
+        await human_sleep(cfg, log, "all groups checked -> Publicar",
+                          cfg.crosspost_action_min, cfg.crosspost_action_max)
         await btn.first.click()
         try:
             await page.wait_for_function(_DIALOG_GONE_JS,
@@ -570,6 +580,8 @@ async def finish_crosspost_dialog(page: Page, publish: bool, cfg: Config,
     if await btn.count() != 1 or not await btn.first.is_visible():
         raise FlowError(f"'{CROSSPOST_CANCEL}' button not unique/visible "
                         f"({await btn.count()})")
+    await human_sleep(cfg, log, "staged dialog -> Cancelar",
+                      cfg.crosspost_action_min, cfg.crosspost_action_max)
     await btn.first.click()
     #: [live 2026-09-23 race lesson] Cancelar closes the dialog ASYNCHRONOUSLY
     #: (fade/unmount) — an immediate :visible count sees the dying dialog and

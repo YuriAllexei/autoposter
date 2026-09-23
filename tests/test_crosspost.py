@@ -190,7 +190,7 @@ def _install(monkeypatch, fake: FakeDialog):
     async def fast(*_a, **_k):
         return None
 
-    async def no_human(cfg, log, why="", **kw):
+    async def no_human(*_a, **_k):
         return None
     monkeypatch.setattr(cx.asyncio, "sleep", fast)
     monkeypatch.setattr(cx, "human_sleep", no_human)
@@ -464,3 +464,56 @@ def test_main_async_feed_without_any_card_match_aborts(tmp_path, monkeypatch):
     rc = asyncio.run(cx.main_async(cfg, Args()))
     assert rc == 1
     assert fake.opens == 0   # no dialog attempted
+
+
+def test_crosspost_action_sleep_range(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("AP_CROSSPOST_ACTION_MIN_SECONDS=abc\n"
+                   "AP_CROSSPOST_ACTION_MAX_SECONDS=99\n", encoding="utf-8")
+    cfg = load_config(env_file=env)
+    assert cfg.crosspost_action_min == 1.0      # garbage -> default
+    assert cfg.crosspost_action_max == 7.0      # capped like every wait
+    bad = tmp_path / "bad.env"
+    bad.write_text("AP_CROSSPOST_ACTION_MIN_SECONDS=5\n"
+                   "AP_CROSSPOST_ACTION_MAX_SECONDS=2\n", encoding="utf-8")
+    try:
+        load_config(env_file=bad)
+        raise AssertionError("min>max must raise")
+    except ValueError:
+        pass
+
+
+def test_select_rows_micro_pauses_between_clicks(tmp_path, monkeypatch):
+    """USER SPEC: consecutive checkbox ticks sleep 0.2-1s BETWEEN clicks;
+    the FIRST click is immediate."""
+    import poster.flows as fl
+
+    class Row:
+        def __init__(self, name): self.name = name; self.checked = False
+        async def inner_text(self): return self.name + "\n10 miembros\n · Público"
+        async def click(self): self.checked = True
+        async def get_attribute(self, a):
+            return "true" if self.checked else "false"
+
+    class Rows:
+        def __init__(self, names): self.items = [Row(n) for n in names]
+        async def count(self): return len(self.items)
+        def nth(self, i): return self.items[i]
+
+    class Pg:
+        def __init__(self, rows): self._rows = rows
+        def locator(self, sel):
+            assert sel == fl.CROSSPOST_ROW_SEL   # pinned selector respected
+            return self._rows
+
+    pg = Pg(Rows([f"G{i}" for i in range(4)]))
+    slept = []
+    async def fake_sleep(s): slept.append(s)
+    monkeypatch.setattr(fl.asyncio, "sleep", fake_sleep)
+    cfg = _cfg(tmp_path)
+    n = asyncio.run(fl.select_crosspost_groups(
+        pg, [{"id": str(i), "name": f"G{i}"} for i in range(4)], cfg,
+        lambda *_a, **_k: None))
+    assert n == 4
+    assert len(slept) == 3                     # BETWEEN ticks only, none first
+    assert all(0.2 <= s <= 1.0 for s in slept)
