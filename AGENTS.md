@@ -1,12 +1,23 @@
 # autoposter — Agent Guide
 
 Facebook group auto-posting bot (Playwright + persistent Firefox profile).
-Each run: becomes the configured identity ("Carmazon Alex" profile or
-"Carmazon" page) → fetches its joined groups LIVE → rotates through them
-(never-attempted first, then oldest ledger attempt, capped) → posts the
-car-inventory summary. Flows come from human recordings via the
-`scraping_recorder` submodule and are keyed by composer LAYOUT, not by group
-(all Spanish groups share one identical composer).
+Two posting pipelines + a control dashboard, all sharing one identity ritual:
+
+- **TEXT POST** (`poster.main`): each run becomes the configured identity
+  ("Carmazon Alex" profile / "Carmazon" page) → fetches joined groups LIVE →
+  rotates (never-attempted first, then oldest ledger attempt, capped) → posts
+  the car-inventory summary (data/post.txt + photos).
+- **CROSSPOST** (`poster.crosspost`): share each active MARKETPLACE LISTING
+  into every group the 'Publicar en más lugares' dialog offers — FB caps one
+  submission at 20 groups, so a listing with 45 groups = batches 20/20/5,
+  ~2 min apart, tracked IN THE RUN ONLY (user rule: no cross-run ledger
+  memory for this pipeline).
+- **DASHBOARD** (`poster.gui`): localhost page — tables (groups, listings,
+  ledger) + one-click dry/live runs of either pipeline + log tail.
+
+Flows come from human recordings via the `scraping_recorder` submodule and
+are keyed by composer LAYOUT, not by group (all Spanish groups share one
+identical composer).
 
 ## Environment / commands
 
@@ -28,7 +39,21 @@ poetry run python -m poster.main --live       # only works if .env has AP_DRY_RU
 poetry run python -m poster.main --list-groups  # joined groups + rotation state (alias: ap-groups)
 
 # Exit codes: 0 posted ≥1 · 1 nothing posted / missing post.txt · 2 not
-# logged in · 3 identity switch failed · 4 joined-groups fetch failed.
+# logged in · 3 identity switch failed · 4 joined-groups fetch failed
+# (or --live refused without AP_DRY_RUN=false).
+
+# CROSSPOST (marketplace listings → groups; same AP_DRY_RUN fail-safe —
+# --live is REFUSED unless .env says AP_DRY_RUN=false):
+poetry run python -m poster.crosspost --list    # cards + feed table, opens NO dialog
+poetry run python -m poster.crosspost --dry-run # per batch: check boxes + screenshot, Cancelar
+poetry run python -m poster.crosspost           # respects AP_DRY_RUN; all listings, all batches
+poetry run python -m poster.crosspost --listing TAHOE --max 2   # filter listings
+# rc: 0 ≥1 batch staged/published · 1 nothing to do · 2/3 identity · 4 --live refused.
+# Ground truth: recording 20260923T021450Z_marketplace_article_fetching_and_mass_pu.
+
+# DASHBOARD (localhost:8765, no auth — loopback bind is deliberate; one run
+# at a time; a LIVE run additionally requires typing PUBLICAR + .env edit):
+poetry run python -m poster.gui --open
 
 # RECORD a flow (ground truth; NEVER commit dumps — they hold cookies).
 # --url optional (no url = bare browser). Dumps land under
@@ -92,6 +117,12 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
 7. MONITORING: exactly ONE Discord summary per run, sent only after it ends
    (success/failure/abort/crash all notify). Dry-run stages never count as
    published; `skipped` never counts. Webhook failure never changes rc.
+8. CROSSPOST TRACKING (user spec 2026-09-23): the batch plan is computed from
+   the dialog's OWN group list each time it opens; the only memory is a set
+   of already-batched group ids FOR THE CURRENT LISTING IN THE CURRENT RUN.
+   Do NOT make run_listing read ledger/coverage across runs — the user
+   rejected that design; ledger lines exist for the Discord summary and
+   audit only.
 
 ## Protocol facts (ground truth from recordings; verify against them before
 ## "fixing" selectors)
@@ -131,6 +162,30 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
   `upload.facebook.com/ajax/react_composer/attachments/photo/upload`.
 - Group posts go through admin approval → live runs save
   `/groups/<id>/my_pending_content/` evidence after publishing.
+- CROSSPOST dialog (recording 20260923T021450Z + live probe
+  .local-capture/crosspost_probe/): every listing card = exactly one
+  `[role=button][aria-label^='Más opciones para ']` → menuitem
+  'Publicar en más lugares' → dialog 'En tus grupos'. The dialog's
+  `MarketplaceCrossPostDialogQuery` payload (sniffed via expect_response)
+  carries the eligible groups (id+name), `marketplace_crosspost_limit` (20)
+  and the LISTING id — ids are not in the DOM. Group rows are
+  `[role=dialog] [role=checkbox]`, text = '<NAME>\n<nn,n mil miembros>\n ·
+  Público' → match folded FIRST LINE. The dialog is modal (aria-modal):
+  close = no aria-modal [role=dialog] remains (`_DIALOG_GONE_JS`).
+- RACE LESSONS (live 2026-09-23, cost two failed smokes): FB hydrates
+  asynchronously everywhere — dialog rows appear AFTER their graphql
+  response (skeleton first: wait for row count ≥ payload count), and the
+  dialog FADES on Cancelar (condition-wait gone, never immediate count()).
+  Same bug family as the listing '...' menu needing wait_for not count().
+- MARKETPLACE LISTINGS feed (`poster/listings.py`,
+  CometMarketplaceYouSellingFastContentContainerQuery): requires the
+  `__relay_internal__pv__ShouldUpdate...relayprovider=false` provided
+  variable (FB errors missing_required_variable_value without it — the
+  JSONL recorder SCRUBBED its name, the trace did not). The feed only shows
+  ACTIVE listings and the selling page renders each card TWICE → dedupe by
+  folded title; cards (not the feed) are the publish set.
+- Crosspost reaches the groups the TEXT pipeline must skip: 'Vender algo'
+  marketplace-tab groups still appear in the crosspost dialog.
 
 ## Adding groups
 

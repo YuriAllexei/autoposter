@@ -27,6 +27,8 @@ from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page
 
+from .config import Config
+
 # ---- proven selector JS (shared with scripts/probe_group.py) ---------------
 
 OPEN_ACCOUNT_MENU_JS = r"""
@@ -350,3 +352,39 @@ async def dump_evidence(
         if base.with_suffix(suffix).exists():
             return base.with_suffix(suffix)
     return None
+
+
+def make_log():
+    """UTC-timestamped logger shared by every entry point."""
+    def log(msg: str) -> None:
+        print(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {msg}", flush=True)
+    return log
+
+
+async def launch(cfg: Config, p):
+    """The ONE persistent-profile bring-up (viewport from cfg). Lives here so
+    EVERY entry point (group runs, crosspost, GUI subprocesses) shares the
+    same profile/viewport contract — Firefox allows only one owner per
+    profile dir, so there must never be a second way to launch."""
+    cfg.profile_dir.mkdir(parents=True, exist_ok=True)
+    ctx = await p.firefox.launch_persistent_context(
+        str(cfg.profile_dir), headless=cfg.headless,
+        viewport={"width": cfg.viewport_width, "height": cfg.viewport_height})
+    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+    return ctx, page
+
+
+async def adopt_identity(ctx, page, cfg: Config, log) -> str:
+    """The two proven pre-conditions every entry point must pass before
+    touching a group or the marketplace: live session + configured identity.
+    Returns 'ok' | 'login' | 'identity' (caller maps to its exit code)."""
+    if not await ensure_login(ctx, page, log):
+        return "login"
+    if not await ensure_active_profile(
+        ctx, page, post_as=cfg.post_as, posting_user_id=cfg.fb_posting_user,
+        main_user_id=cfg.fb_main_user, posting_name=cfg.fb_posting_profile_name,
+        main_profile_name=cfg.fb_main_profile_name, log=log,
+    ):
+        return "identity"
+    return "ok"
+

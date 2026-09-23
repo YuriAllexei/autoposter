@@ -33,8 +33,10 @@ draft clear, keyboard.type). Match by text/aria/role, never obfuscated classes.
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -331,3 +333,257 @@ async def group_composer_es_v1(
     return {"published": True}
 
 
+# ================= CROSSPOST: "Publicar en más lugares" =====================
+# Ground truth: recording 20260923T021450Z_marketplace_article_fetching_and_mass_pu
+# + LIVE read-only probe 2026-09-23 (.local-capture/crosspost_probe/report.md —
+# 5 dialog opens, every close via Cancelar) + first LIVE dry-run 2026-09-23
+# (lessons baked in: the listing menu renders ASYNC — wait_for, never count();
+# and the graphql fast-feed MISSES 'Requieren atención' listings, so the
+# page's CARDS are the ground-truth publish set).
+# Layout key: crosspost_dialog_es_v1 (Spanish UI — the dialog's menu/labels
+# were never probed in English, so we fail loudly instead of guessing).
+
+CROSSPOST_MENU_ITEM = "Publicar en más lugares"
+CROSSPOST_DIALOG_QUERY = "MarketplaceCrossPostDialogQuery"
+CROSSPOST_CANCEL = "Cancelar"
+CROSSPOST_PUBLISH = "Publicar"
+CROSSPOST_MORE_PREFIX = "Más opciones para "
+
+#: the only clickable rows in the dialog (probe 2026-09-23): checkboxes live
+#: in 'En tus grupos'; suggested rows are buttons — never targeted.
+CROSSPOST_ROW_SEL = '[role="dialog"] [role="checkbox"]'
+
+#: shared close-detector: the modal dialog is gone when no aria-modal
+#: [role=dialog] remains (probe 2026-09-23: FB removes the node / its flag)
+_DIALOG_GONE_JS = ("() => ![...document.querySelectorAll('[role=dialog]')]"
+                   ".some(d => d.getAttribute('aria-modal') === 'true')")
+
+
+def _norm(s: str) -> str:
+    """Text-folding for name/label matching (accents + whitespace + case):
+    group titles carry unicode emoji/acents and dialog rows vs graphql 'name'
+    must compare equal regardless of NFC/NFD or line breaks."""
+    return " ".join(unicodedata.normalize("NFC", str(s)).split()).casefold()
+
+
+def parse_crosspost_targets(text: str) -> tuple[list, int, str]:
+    """Pure/testable: first chunk of MarketplaceCrossPostDialogQuery ->
+    ([{'id','name'}...] in dialog order), per-submission cap, and the LISTING
+    id the dialog belongs to (cross_post_info.all_listings[0].id — [proven:
+    probe §4] the payload carries it, so card enumeration never needs listing
+    ids up front). [proven] edges[] order == checkbox DOM order."""
+    body = text.lstrip()
+    for pref in ("for(;;);", ")]}'"):
+        if body.startswith(pref):
+            body = body[len(pref):].lstrip()
+    data = json.loads(body.split("\n", 1)[0])["data"]["viewer"]
+    limit = int(data.get("marketplace_crosspost_limit") or 20)
+    edges = ((data.get("marketplace_suggested_crosspost_targets")
+              or {}).get("edges") or [])
+    out = [{"id": str(e["node"]["id"]), "name": str(e["node"].get("name") or "")}
+           for e in edges
+           if isinstance(e.get("node"), dict) and e["node"].get("id")]
+    cpi = ((data.get("marketplace_listing") or {}).get("cross_post_info") or {})
+    first = (cpi.get("all_listings") or [{}])[0]
+    return out, limit, str(first.get("id") or "")
+
+
+async def listing_card_titles(page: Page, settle_ms: int = 1200,
+                              max_wait_ms: int = 30000) -> list[str]:
+    """Every sellable card on /marketplace/you/selling — ACTIVE plus flagged
+    'Requieren atención' ones (2026-09-23 live lesson). [proven] each card
+    exposes exactly one [role=button][aria-label^='Más opciones para ']
+    (probe §2). Polls until the count is stable so we never enumerate a
+    half-loaded feed."""
+    sel = f'[role="button"][aria-label^="{CROSSPOST_MORE_PREFIX}"]'
+    try:
+        await page.locator(sel).first.wait_for(state="attached",
+                                               timeout=max_wait_ms)
+    except PWTimeoutError:
+        return []
+    prev, now = -1, await page.locator(sel).count()
+    while now != prev and now > 0:
+        prev = now
+        await page.wait_for_timeout(settle_ms)
+        now = await page.locator(sel).count()
+    titles = []
+    for i in range(now):
+        al = await page.locator(sel).nth(i).get_attribute("aria-label") or ""
+        titles.append(al.partition(CROSSPOST_MORE_PREFIX)[2].strip())
+    return [t for t in titles if t]
+
+
+def _dialog_response_filter():
+    """Fired ONLY by this button, and only one dialog is ever open — the
+    friendly name alone identifies the response (listing id is unknown until
+    the response itself carries it)."""
+    def ok(resp) -> bool:
+        try:
+            req = resp.request
+            return ("graphql" in req.url
+                    and CROSSPOST_DIALOG_QUERY in (req.post_data or ""))
+        except Exception:  # a detached request is simply not ours
+            return False
+    return ok
+
+
+async def open_crosspost_dialog(page: Page, title: str, cfg: Config,
+                                log: log_fn = print) -> tuple[list, int, str]:
+    """Card '...' -> exact 'Publicar en más lugares' -> dialog. Returns
+    (candidate groups, cap, listing id from the dialog payload). Raises
+    FlowError with evidence otherwise."""
+    sel = f'[role="button"][aria-label="{CROSSPOST_MORE_PREFIX}{title}"]'
+    btn = page.locator(sel).first
+    if not await btn.count():
+        all_btns = page.locator(
+            f'[role="button"][aria-label^="{CROSSPOST_MORE_PREFIX}"]')
+        hits = []
+        for i in range(await all_btns.count()):
+            al = await all_btns.nth(i).get_attribute("aria-label") or ""
+            if _norm(al.partition(CROSSPOST_MORE_PREFIX)[2]) == _norm(title):
+                hits.append(all_btns.nth(i))
+        if len(hits) != 1:
+            shot = await dump_evidence(page, cfg.screenshot_dir,
+                                       "crosspost_no_button")
+            raise FlowError(f"no unique MORE button for {title!r} "
+                            f"({len(hits)} folded matches). Evidence: {shot}")
+        btn = hits[0]
+
+    await human_sleep(cfg, log, "before opening the listing '...' menu")
+    async with page.expect_response(_dialog_response_filter(),
+                                    timeout=30000) as rinfo:
+        await btn.click()
+        item = page.get_by_role("menuitem", name=CROSSPOST_MENU_ITEM, exact=True)
+        try:
+            await item.first.wait_for(state="visible", timeout=10000)
+        except PWTimeoutError:
+            shot = await dump_evidence(page, cfg.screenshot_dir,
+                                       "crosspost_menu_never_opened")
+            raise FlowError(f"listing menu never rendered "
+                            f"'{CROSSPOST_MENU_ITEM}'. Evidence: {shot}") from None
+        await item.first.click()
+    resp = await rinfo.value
+    try:
+        groups, limit, listing_id = parse_crosspost_targets(await resp.text())
+    except Exception as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crosspost_dialog_parse")
+        raise FlowError(f"dialog payload unreadable ({type(e).__name__}: {e}). "
+                        f"Evidence: {shot}") from e
+    if not groups:
+        shot = await dump_evidence(page, cfg.screenshot_dir, "crosspost_no_targets")
+        raise FlowError(f"dialog offered 0 groups for {title!r}. "
+                        f"Evidence: {shot}")
+    log(f"crosspost dialog [{title[:32]!r}]: {len(groups)} groups, cap {limit}, "
+        f"listing id {listing_id or '?'}")
+    #: [live 2026-09-23] the dialog hydrates SLOWER than its graphql answer
+    #: — the payload is readable while the rows are still skeleton bars
+    #: (0 [role=checkbox]). Do not call the dialog open until the DOM holds
+    #: what the payload promised; select would otherwise find no rows.
+    if groups:
+        try:
+            await page.wait_for_function(
+                "(args) => document.querySelectorAll(args.sel).length"
+                " >= args.n",
+                arg={"sel": CROSSPOST_ROW_SEL, "n": len(groups)},
+                timeout=15000,
+            )
+        except PWTimeoutError as e:
+            shot = await dump_evidence(page, cfg.screenshot_dir,
+                                       "crosspost_dialog_skeleton")
+            raise FlowError(
+                f"dialog never filled its {len(groups)} rows (skeleton "
+                f"after 15s). Evidence: {shot}") from e
+    return groups, limit, listing_id
+
+
+async def select_crosspost_groups(page: Page, groups: list,
+                                  cfg: Config, log: log_fn = print) -> int:
+    """Check exactly these groups in the OPEN dialog. [proven] checkboxes
+    exist ONLY in 'En tus grupos' (suggested rows are 'Unirte al grupo'
+    buttons — NEVER clickable by design: the selector cannot reach them);
+    rows carry no id — match folded first-line text, read back aria-checked
+    after every trusted click (1:1 discipline)."""
+    rows = page.locator(CROSSPOST_ROW_SEL)
+    n = await rows.count()
+    first_line: dict[str, int] = {}
+    for i in range(n):
+        key = _norm((await rows.nth(i).inner_text()).split("\n", 1)[0])
+        first_line.setdefault(key, i)
+    picked: list[int] = []
+    for g in groups:
+        i = first_line.get(_norm(g["name"]))
+        if i is None or i in picked:
+            shot = await dump_evidence(page, cfg.screenshot_dir,
+                                       "crosspost_row_missing")
+            raise FlowError(f"dialog row for {g['name']!r} not found/unique "
+                            f"({n} rows). Evidence: {shot}")
+        picked.append(i)
+    for pos, (i, g) in enumerate(zip(picked, groups, strict=True), 1):
+        await rows.nth(i).click()
+        if await rows.nth(i).get_attribute("aria-checked") != "true":
+            shot = await dump_evidence(page, cfg.screenshot_dir,
+                                       "crosspost_check_fail")
+            raise FlowError(f"row {g['name']!r} click left aria-checked false. "
+                            f"Evidence: {shot}")
+        log(f"crosspost: checked '{str(g['name'])[:44]}' ({pos}/{len(picked)})")
+    return len(picked)
+
+
+async def finish_crosspost_dialog(page: Page, publish: bool, cfg: Config,
+                                  log: log_fn = print) -> str:
+    """Dry-run: screenshot the fully-checked dialog, then Cancelar and verify
+    it is gone (NOTHING submitted — the probe closed every dialog this way).
+    Live: screenshot first, then Publicar, then the dialog MUST disappear."""
+    staged_shot = await dump_evidence(page, cfg.screenshot_dir, "crosspost_staged")
+    if publish:
+        btn = page.get_by_role("button", name=CROSSPOST_PUBLISH, exact=True)
+        if await btn.count() != 1 or not await btn.first.is_visible():
+            raise FlowError(f"'{CROSSPOST_PUBLISH}' button not unique/visible "
+                            f"({await btn.count()}) — refusing to guess-click")
+        await human_sleep(cfg, log, "all groups checked -> Publicar")
+        await btn.first.click()
+        try:
+            await page.wait_for_function(_DIALOG_GONE_JS,
+                            timeout=20000)
+        except PWTimeoutError as e:
+            shot = await dump_evidence(page, cfg.screenshot_dir,
+                                       "crosspost_publish_timeout")
+            raise FlowError(
+                "dialog still open 20s after Publicar — OUTCOME UNKNOWN, "
+                f"check manually before retrying. Evidence: {shot}") from e
+        after = await dump_evidence(page, cfg.screenshot_dir,
+                                    "crosspost_published")
+        return f"published (before:{staged_shot} after:{after})"
+
+    btn = page.get_by_role("button", name=CROSSPOST_CANCEL, exact=True)
+    if await btn.count() != 1 or not await btn.first.is_visible():
+        raise FlowError(f"'{CROSSPOST_CANCEL}' button not unique/visible "
+                        f"({await btn.count()})")
+    await btn.first.click()
+    #: [live 2026-09-23 race lesson] Cancelar closes the dialog ASYNCHRONOUSLY
+    #: (fade/unmount) — an immediate :visible count sees the dying dialog and
+    #: falsely reports 'survived'. Wait for the same predicate the publish
+    #: path uses, short timeout, then judge.
+    try:
+        await page.wait_for_function(_DIALOG_GONE_JS, timeout=5000)
+    except PWTimeoutError as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crosspost_cancel_stuck")
+        raise FlowError(
+            f"dialog survived Cancelar (5s). Evidence: {shot}") from e
+    return f"cancelled (dry run, NOTHING published; staged:{staged_shot})"
+
+async def dismiss_crosspost_dialog(page: Page, log: log_fn = print) -> None:
+    """Best-effort close after a mid-dialog failure — never let a stuck
+    modal poison the next listing (Cancelar first, Escape as fallback;
+    NEVER Publicar)."""
+    try:
+        btn = page.get_by_role("button", name=CROSSPOST_CANCEL, exact=True)
+        if await btn.count() and await btn.first.is_visible():
+            await btn.first.click()
+        elif await page.locator('[role="dialog"]').count():
+            await page.keyboard.press("Escape")
+        log("crosspost: dialog dismissed after failure")
+    except Exception as e:  # dismissal must never mask the original error
+        log(f"crosspost: dialog dismissal failed ({type(e).__name__}: {e})")

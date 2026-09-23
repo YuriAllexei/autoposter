@@ -22,6 +22,9 @@ MAX_ALLOWED_DELAY = 7.0
 # group-to-group switch sleep is 10-15s by design. This is its own safety
 # ceiling so a typo in .env can never park the bot for minutes.
 MAX_ALLOWED_GROUP_SWITCH = 20.0
+#: crosspost batch/listing gap is its own category (user spec 2026-09-23:
+#: ~2 min between batches of one listing AND between listings); capped.
+MAX_ALLOWED_CROSSPOST_GAP = 300.0
 
 
 def _as_bool(v: str | None, default: bool) -> bool:
@@ -105,6 +108,14 @@ class Config:
     type_delay_min_ms: int = 30
     type_delay_max_ms: int = 90
 
+    # ---- marketplace crosspost pipeline (poster/crosspost.py) ----
+    # Explicit user rule (2026-09-23): ALL batches run in one go, separated
+    # by ~2 minutes. Capped at MAX_ALLOWED_CROSSPOST_GAP like every other wait.
+    crosspost_gap_min: float = 110.0
+    crosspost_gap_max: float = 130.0
+    #: 0 = every active listing per run (user decision: all in one run)
+    crosspost_max_listings: int = 0
+
     log_dir: Path = field(default=Path(".local-capture/logs"))
     screenshot_dir: Path = field(default=Path(".local-capture/shots"))
 
@@ -137,6 +148,16 @@ class Config:
                 f"{self.group_switch_max} (need 0 <= min <= max)")
         self.group_switch_max = min(self.group_switch_max, MAX_ALLOWED_GROUP_SWITCH)
         self.group_switch_min = min(self.group_switch_min, self.group_switch_max)
+        if (self.crosspost_gap_min < 0
+                or self.crosspost_gap_max < self.crosspost_gap_min):
+            raise ValueError(
+                f"invalid crosspost-gap config: AP_CROSSPOST_GAP_MIN_SECONDS="
+                f"{self.crosspost_gap_min} AP_CROSSPOST_GAP_MAX_SECONDS="
+                f"{self.crosspost_gap_max} (need 0 <= min <= max)")
+        self.crosspost_gap_max = min(self.crosspost_gap_max,
+                                     MAX_ALLOWED_CROSSPOST_GAP)
+        self.crosspost_gap_min = min(self.crosspost_gap_min,
+                                     self.crosspost_gap_max)
 
     @property
     def identity_label(self) -> str:
@@ -152,8 +173,11 @@ class Config:
                 else self.fb_posting_user)
 
 
-def load_config(env_file: Path | None = None) -> Config:
-    """Build Config from defaults + .env file + process environment."""
+def load_config(env_file: Path | str | None = None) -> Config:
+    """Build Config from defaults + .env file + process environment.
+    `env_file` accepts str too (argparse hands us raw --env-file strings)."""
+    if env_file is not None:
+        env_file = Path(env_file)
     file_vars = parse_env_file(env_file or (_as_path(os.environ.get("AP_ENV_FILE"), ".env")))
 
     def get(key: str) -> str | None:
@@ -183,6 +207,9 @@ def load_config(env_file: Path | None = None) -> Config:
         delay_max=_as_float(get("AP_DELAY_MAX_SECONDS"), 180.0),
         group_switch_min=_as_float(get("AP_GROUP_SWITCH_MIN_SECONDS"), 10.0),
         group_switch_max=_as_float(get("AP_GROUP_SWITCH_MAX_SECONDS"), 15.0),
+        crosspost_gap_min=_as_float(get("AP_CROSSPOST_GAP_MIN_SECONDS"), 110.0),
+        crosspost_gap_max=_as_float(get("AP_CROSSPOST_GAP_MAX_SECONDS"), 130.0),
+        crosspost_max_listings=_as_int(get("AP_CROSSPOST_MAX_LISTINGS"), 0),
         type_delay_min_ms=_as_int(get("AP_TYPE_DELAY_MIN_MS"), 30),
         type_delay_max_ms=_as_int(get("AP_TYPE_DELAY_MAX_MS"), 90),
         log_dir=_as_path(get("AP_LOG_DIR"), ".local-capture/logs"),

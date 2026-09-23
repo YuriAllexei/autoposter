@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from playwright.async_api import async_playwright
 
 from .config import Config, load_config
-from .fb import dump_evidence, ensure_active_profile, ensure_login
+from .fb import adopt_identity, dump_evidence, launch, make_log
 from .flows import COMPOSER_TRIGGER_RE, FlowError, Post, group_composer_es_v1, human_sleep
 from .groups_fetch import GroupsFetchError, fetch_joined_groups
 from .notify import build_payload, send_summary
@@ -52,38 +52,6 @@ class Tee:
     def flush(self):
         for sink in self.sinks:
             sink.flush()
-
-
-def make_log():
-    """UTC-timestamped logger shared by every entry point."""
-    def log(msg: str) -> None:
-        print(f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {msg}", flush=True)
-    return log
-
-
-async def launch(cfg: Config, p):
-    """The ONE persistent-profile bring-up (viewport from cfg)."""
-    cfg.profile_dir.mkdir(parents=True, exist_ok=True)
-    ctx = await p.firefox.launch_persistent_context(
-        str(cfg.profile_dir), headless=cfg.headless,
-        viewport={"width": cfg.viewport_width, "height": cfg.viewport_height})
-    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-    return ctx, page
-
-
-async def adopt_identity(ctx, page, cfg: Config, log) -> str:
-    """The two proven pre-conditions every entry point must pass before
-    touching a group: live session + configured identity.
-    Returns 'ok' | 'login' | 'identity' (caller maps to its exit code)."""
-    if not await ensure_login(ctx, page, log):
-        return "login"
-    if not await ensure_active_profile(
-        ctx, page, post_as=cfg.post_as, posting_user_id=cfg.fb_posting_user,
-        main_user_id=cfg.fb_main_user, posting_name=cfg.fb_posting_profile_name,
-        main_profile_name=cfg.fb_main_profile_name, log=log,
-    ):
-        return "identity"
-    return "ok"
 
 
 def build_post(cfg: Config) -> Post:

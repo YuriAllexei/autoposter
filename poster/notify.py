@@ -59,6 +59,45 @@ def build_payload(summary: dict, profile_name: str = "") -> dict:
     }
 
 
+def build_crosspost_payload(summary: dict, profile_name: str = "") -> dict:
+    """summary = RunRecorder.summary_crosspost() — one embed per crosspost run
+    (same never-fails philosophy as build_payload: pure function)."""
+    dry = summary["dry_run"]
+    aborted = summary.get("aborted")
+    bad = bool(aborted) or summary["failed"] > 0
+    color = COLOR_BAD if bad else (COLOR_DRY if dry else COLOR_OK)
+    done = summary["published"] + summary["staged"]
+    head = (f"**Batches {'staged (dry run)' if dry else 'published'}: {done}/"
+            f"{summary['attempted']}** · **Failed: {summary['failed']}** · "
+            f"**Duration: {summary['duration_s']}s**")
+    lines = [f"**⛔ Run aborted:** {aborted}" if aborted else head]
+    totals = summary.get("totals_crossposted_batches_all_time", {})
+    for r in summary["listings"]:
+        name = str(r["listing_title"])[:70]
+        if r["status"] == STATUS_FAILED:
+            lines.append(f"❌ {name} b{r['batch']} — `{str(r.get('error') or '')[:110]}`")
+        elif r["status"] == STATUS_SKIPPED:
+            lines.append(f"⏭️ {name} — {str(r.get('error') or '')[:110]}")
+        elif dry:
+            lines.append(f"🧪 {name} — batch {r['batch']}: {r['count']} groups "
+                         f"checked, dialog CANCELLED (nothing published)")
+        else:
+            lines.append(f"✅ {name} — batch {r['batch']}: {r['count']} groups · "
+                         f"all-time batches: {totals.get(str(r['listing_id']), 0)}")
+    title = (f"autoposter crosspost · {profile_name or 'autoposter'} · "
+             f"{'DRY RUN' if dry else 'LIVE'} · {summary['run_id']}")
+    return {
+        "username": "autoposter",
+        "embeds": [{
+            "title": title[:256],
+            "description": "\n".join(lines)[:EMBED_DESC_LIMIT],
+            "color": color,
+            "timestamp": summary["started"],
+            "footer": {"text": f"ledger: .local-capture results · run {summary['run_id']}"},
+        }],
+    }
+
+
 def send_summary(webhook_url: str, payload: dict, log=print,
                  timeout: float = 10.0) -> bool:
     """POST the embed; one retry for transient errors. NEVER raises: a dead

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -91,10 +92,35 @@ def count_published(ledger_path: Path) -> dict[str, int]:
     return counts
 
 
+def count_crossposts(ledger_path: Path) -> dict[str, int]:
+    """All-time PUBLISHED batches per listing_id (dry-runs never count —
+    same discipline as count_published). Reporting only: feeds the crosspost
+    Discord summary's totals. No run DECISION reads ledger history —
+    batch tracking is in-run only (user rule 2026-09-23)."""
+    counts: dict[str, int] = {}
+    for rec in _iter_records(ledger_path):
+        lid = str(rec.get("listing_id") or "")
+        if lid and rec.get("status") == STATUS_PUBLISHED:
+            counts[lid] = counts.get(lid, 0) + 1
+    return counts
+
+
 @dataclass
 class GroupResult:
     name: str
     group_id: str
+    status: str
+    error: str | None = None
+
+
+@dataclass
+class CrossResult:
+    """One crosspost BATCH (≤20 groups) of one listing."""
+    listing_id: str
+    listing_title: str
+    batch: int
+    count: int
+    group_ids: list
     status: str
     error: str | None = None
 
@@ -108,6 +134,48 @@ class RunRecorder:
     dry_run: bool
     started: datetime = field(default_factory=lambda: datetime.now(UTC))
     results: list[GroupResult] = field(default_factory=list)
+    cross_results: list[CrossResult] = field(default_factory=list)
+
+    def crosspost(self, listing: Mapping, batch: int, groups: list,
+                  ok: bool, error: str | None = None) -> CrossResult:
+        """One dialog-submission for one listing (groups = [{'id','name'}...])."""
+        status = (STATUS_STAGED if self.dry_run else STATUS_PUBLISHED) \
+            if ok else STATUS_FAILED
+        res = CrossResult(
+            listing_id=str(listing["id"]),
+            listing_title=str(listing.get("title") or listing["id"])[:120],
+            batch=batch, count=len(groups),
+            group_ids=[str(g["id"]) for g in groups],
+            status=status, error=error)
+        self.cross_results.append(res)
+        self._append_ledger_cross(res, groups)
+        return res
+
+    def crosspost_skipped(self, listing: Mapping, reason: str) -> CrossResult:
+        """Every offered group already covered for this listing — nothing to
+        do. Recorded for rotation/reporting; never counts as published."""
+        res = CrossResult(
+            listing_id=str(listing["id"]),
+            listing_title=str(listing.get("title") or listing["id"])[:120],
+            batch=-1, count=0, group_ids=[],
+            status=STATUS_SKIPPED, error=reason)
+        self.cross_results.append(res)
+        self._append_ledger_cross(res, [])
+        return res
+
+    def _append_ledger_cross(self, res: CrossResult, groups: list) -> None:
+        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        line = {
+            "run_id": self.run_id,
+            "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+            "listing_id": res.listing_id, "listing_title": res.listing_title,
+            "batch": res.batch, "count": res.count,
+            "group_ids": res.group_ids,
+            "group_names": [str(g.get("name") or "")[:80] for g in groups],
+            "status": res.status, "error": res.error, "dry_run": self.dry_run,
+        }
+        with self.ledger_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line, ensure_ascii=False) + "\n")
 
     def record(self, group: dict, ok: bool, error: str | None = None) -> GroupResult:
         if ok:
@@ -159,4 +227,20 @@ class RunRecorder:
             "attempted": len(self.results),
             "groups": [vars(r) for r in self.results],
             "totals_published_all_time": totals,
+        }
+
+    def summary_crosspost(self, aborted: str | None = None) -> dict:
+        """Same envelope idea as summary(), for the crosspost pipeline."""
+        totals = count_crossposts(self.ledger_path)
+        return {
+            "run_id": self.run_id, "dry_run": self.dry_run, "aborted": aborted,
+            "started": self.started.isoformat(timespec="seconds"),
+            "duration_s": round((datetime.now(UTC) - self.started).total_seconds(), 1),
+            "published": sum(1 for r in self.cross_results if r.status == STATUS_PUBLISHED),
+            "staged": sum(1 for r in self.cross_results if r.status == STATUS_STAGED),
+            "failed": sum(1 for r in self.cross_results if r.status == STATUS_FAILED),
+            "skipped": sum(1 for r in self.cross_results if r.status == STATUS_SKIPPED),
+            "attempted": len(self.cross_results),
+            "listings": [vars(r) for r in self.cross_results],
+            "totals_crossposted_batches_all_time": totals,
         }

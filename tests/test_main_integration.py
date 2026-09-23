@@ -18,6 +18,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 pytest.importorskip("playwright")  # main.py imports it at module level
 
+from poster import fb as mfb
 from poster import main as m
 from poster import notify
 from poster.config import Config
@@ -123,8 +124,8 @@ def _make_harness(tmp_path, monkeypatch, *, dry=False, joined=None):
     async def no_evidence(page, dir_, tag, html="", extra=None):
         return Path("/dev/null")
 
-    monkeypatch.setattr(m, "ensure_login", ok_login)
-    monkeypatch.setattr(m, "ensure_active_profile", ok_profile)
+    monkeypatch.setattr(mfb, "ensure_login", ok_login)
+    monkeypatch.setattr(mfb, "ensure_active_profile", ok_profile)
     monkeypatch.setattr(m, "verify_pending", no_verify)
     monkeypatch.setattr(m, "human_sleep", no_sleep)
     monkeypatch.setattr(m, "dump_evidence", no_evidence)
@@ -240,7 +241,7 @@ def test_login_abort_notifies_with_reason(tmp_path, monkeypatch):
 
     async def bad_login(ctx, page, log, login_timeout=900):
         return False
-    monkeypatch.setattr(m, "ensure_login", bad_login)
+    monkeypatch.setattr(mfb, "ensure_login", bad_login)
     rc = asyncio.run(m.main_async(cfg, None))
     assert rc == 2
     assert _ledger_lines(cfg) == []  # nothing attempted -> nothing recorded
@@ -254,7 +255,7 @@ def test_profile_abort_notifies_with_reason(tmp_path, monkeypatch):
                           main_user_id, posting_name, main_profile_name="",
                           log=None):
         return False
-    monkeypatch.setattr(m, "ensure_active_profile", bad_profile)
+    monkeypatch.setattr(mfb, "ensure_active_profile", bad_profile)
     rc = asyncio.run(m.main_async(cfg, None))
     assert rc == 3
     assert len(posts) == 1 and "TestProfile" in _desc(posts[0])
