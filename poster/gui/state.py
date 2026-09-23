@@ -378,7 +378,11 @@ def crosspost_rollup(lines: list[LedgerLine]) -> dict[str, dict[str, Any]]:
             "listing_id": line.listing_id, "listing_title": line.listing_title,
             "batches": 0, "groups": [], "last_ts": "", "last_status": "",
             "last_error": None, "last_batch": None, "last_count": None,
+            "delivered": "",
         })
+        if line.status == "published" and line.delivered:
+            # newest sampled verdict wins (mirrors group_rollup semantics)
+            row["delivered"] = line.delivered
         row["batches"] += 1
         for gid in line.group_ids:
             if gid not in row["groups"]:
@@ -488,6 +492,7 @@ def build_state(paths: GuiPaths, identity: dict[str, Any] | None = None,
     total_groups = len(groups["rows"])
     for row in listings["rows"]:
         cov = by_listing.get(row["id"], {})
+        row["delivered"] = cov.get("delivered", "")
         row["crossposts"] = cov.get("batches", 0)
         row["crosspost_groups"] = len(cov.get("groups", []))
         row["crosspost_coverage"] = (

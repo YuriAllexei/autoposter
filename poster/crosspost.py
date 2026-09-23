@@ -51,6 +51,7 @@ from .flows import (
     select_crosspost_groups,
 )
 from .listings import ListingsFetchError, fetch_active_listings
+from .main import post_snippet, verify_pending
 from .notify import build_crosspost_payload, send_summary
 from .results import RunRecorder
 
@@ -58,6 +59,28 @@ from .results import RunRecorder
 #: removes >=1 group from `remaining`), so hitting this means the dialog is
 #: offering NEW groups every round — stop rather than loop on a moving feed.
 MAX_BATCHES_PER_LISTING = 10
+
+
+async def _delivery_verdict(page, cfg: Config, log, group: dict,
+                            title: str) -> str:
+    """SAMPLED delivery verdict for a published batch.
+
+    A batch can span up to 20 groups, each with its OWN moderation queue —
+    visiting all of them after every submit would triple the run and trip
+    rate limits. So we verify ONE representative group (the batch's first):
+    FB queues crossposts uniformly, making this an evidence-backed read of
+    whether submissions land in approval (pending) or straight in feeds
+    (live). Like the group pipeline's verdict it NEVER gates the publish.
+    """
+    try:
+        # the shared post shows the LISTING TITLE in the group — that is
+        # the string to hunt for, not the group's own name
+        return await verify_pending(
+            page, f"https://www.facebook.com/groups/{group['id']}/",
+            cfg, log, post_snippet(title))
+    except Exception as e:  # noqa: BLE001 — a verdict must not sink a batch
+        log(f"[listing] delivery check crashed: {e}")
+        return "unknown"
 
 
 
@@ -113,7 +136,12 @@ async def run_listing(page, cfg: Config, recorder: RunRecorder, title: str,
             log(f"[listing] {title[:50]!r} batch {batches} FAILED: {e}")
             return batches
         done.update(str(g["id"]) for g in batch)
-        recorder.crosspost(listing, batches, batch, True)
+        verdict = None
+        if not cfg.dry_run and batch:
+            verdict = await _delivery_verdict(page, cfg, log, batch[0], title)
+            log(f"[listing] {title[:50]!r} batch {batches} delivery check "
+                f"(sampled in {str(batch[0].get('name'))[:28]!r}): {verdict}")
+        recorder.crosspost(listing, batches, batch, True, delivered=verdict)
         log(f"[listing] {title[:50]!r} batch {batches} -> {len(batch)} groups "
             f"| {detail}")
         batches += 1

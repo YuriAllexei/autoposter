@@ -1019,3 +1019,25 @@ def test_page_has_content_editor():
     # the no-CDN rule keeps a src= attribute OUT of the template (JS assigns
     # img.src at runtime) — double-check the editor did not smuggle one in
     assert "src=" not in html
+
+
+def test_crosspost_rollup_surfaces_latest_sampled_verdict(tmp_path):
+    populated_root(tmp_path)
+    with (tmp_path / "results" / "ledger.jsonl").open(
+            "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "run_id": "R3", "ts": "2026-09-24T00:00:00+00:00",
+            "listing_id": L1, "listing_title": "2019 Chevrolet Tahoe LT",
+            "batch": 1, "count": 3, "group_ids": ["a", "b", "c"],
+            "group_names": ["A", "B", "C"], "status": "published",
+            "error": None, "dry_run": False, "delivered": "live"}) + "\n")
+    st = build_state(GuiPaths.from_root(tmp_path), IDENTITY)
+    listing = st["listings"]["rows"][0]
+    assert listing["delivered"] == "live"
+    assert listing["crossposts"] == 2
+
+
+def test_page_has_delivery_column_for_listings_too():
+    html = render_page()
+    assert html.count("<th>live?</th>") == 2   # groups AND listings cards
+    assert "DELIVERED" in html and "deliveredCell" in html

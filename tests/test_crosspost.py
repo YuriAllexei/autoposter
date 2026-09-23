@@ -517,3 +517,65 @@ def test_select_rows_micro_pauses_between_clicks(tmp_path, monkeypatch):
     assert n == 4
     assert len(slept) == 3                     # BETWEEN ticks only, none first
     assert all(0.2 <= s <= 1.0 for s in slept)
+
+
+# ---- sampled delivery verdict on live batches ----
+
+def test_live_batch_records_sampled_delivery_verdict(tmp_path, monkeypatch):
+    import json
+    groups = [{"id": "g1", "name": "G1"}, {"id": "g2", "name": "G2"}]
+    fake = FakeDialog(groups)
+    _install(monkeypatch, fake)
+    seen = {}
+
+    async def fake_verify(page, url, cfg, log, snippet=""):
+        seen["url"] = url
+        seen["snippet"] = snippet
+        return "pending"
+    monkeypatch.setattr(cx, "verify_pending", fake_verify)
+    cfg = _cfg(tmp_path, dry_run=False)
+    rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=False)
+    n = asyncio.run(cx.run_listing(FakePage(), cfg, rec,
+                                   "2019 Chevrolet TAHOE LT", print,
+                                   known_id="L1"))
+    assert n == 1
+    assert rec.cross_results[0].status == STATUS_PUBLISHED
+    assert rec.cross_results[0].delivered == "pending"
+    # sampled = FIRST group of the batch; marker = folded listing title
+    assert seen["url"] == "https://www.facebook.com/groups/g1/"
+    assert seen["snippet"] == "2019 chevrolet tahoe lt"
+    row = [json.loads(x) for x in
+           cfg.ledger_file.read_text().splitlines()][-1]
+    assert row["delivered"] == "pending"
+
+
+def test_dry_batch_never_carries_a_verdict(tmp_path, monkeypatch):
+    fake = FakeDialog([{"id": "g1", "name": "G1"}])
+    _install(monkeypatch, fake)
+
+    async def boom(*_a, **_k):
+        raise AssertionError("verify must not run on dry batches")
+    monkeypatch.setattr(cx, "verify_pending", boom)
+    cfg = _cfg(tmp_path)                      # dry_run=True
+    rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
+    n = asyncio.run(cx.run_listing(FakePage(), cfg, rec, "T", print,
+                                   known_id="L1"))
+    assert n == 1
+    assert rec.cross_results[0].delivered is None
+
+
+def test_crashing_verdict_degrades_to_unknown_not_failure(tmp_path,
+                                                          monkeypatch):
+    fake = FakeDialog([{"id": "g1", "name": "G1"}])
+    _install(monkeypatch, fake)
+
+    async def crash(*_a, **_k):
+        raise RuntimeError("page died mid-verify")
+    monkeypatch.setattr(cx, "verify_pending", crash)
+    cfg = _cfg(tmp_path, dry_run=False)
+    rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=False)
+    n = asyncio.run(cx.run_listing(FakePage(), cfg, rec, "T", print,
+                                   known_id="L1"))
+    assert n == 1                            # batch still counts as done
+    assert rec.cross_results[0].status == STATUS_PUBLISHED
+    assert rec.cross_results[0].delivered == "unknown"

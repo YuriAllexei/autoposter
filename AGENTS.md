@@ -223,6 +223,11 @@ for an unseen composer LAYOUT, never per group.
 - Delivery verification PARTIALLY landed: live publishes now run
   `verify_pending`, which checks my_pending_content then the group feed and
   stamps the ledger row `delivered: pending|live|unknown` (shown as the
-  "live?" dashboard column + a Discord suffix). A failed verdict NEVER turns
-  a publish into a failure. Still open: a scheduled re-check that flips an
-  old "pending" to "live" once admins approve, and a cron scheduler.
+  "live?" dashboard column + a Discord suffix). CROSSPOST BATCHES verify too
+  — SAMPLED: after a live batch the first group of that batch gets one
+  pending/feed check (a 20-group batch means up to 20 moderation queues;
+  checking all of them would triple the run) and its verdict is stamped on
+  the batch row + surfaced under "live?" in the listings card. In both
+  pipelines a failed verdict NEVER turns a publish into a failure. Still
+  open: a scheduled re-check that flips an old "pending" to "live" once
+  admins approve, and a cron scheduler.

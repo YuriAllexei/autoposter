@@ -86,8 +86,13 @@ def build_crosspost_payload(summary: dict, profile_name: str = "") -> dict:
             lines.append(f"🧪 {name} — batch {r['batch']}: {r['count']} groups "
                          f"checked, dialog CANCELLED (nothing published)")
         else:
-            lines.append(f"✅ {name} — batch {r['batch']}: {r['count']} groups · "
-                         f"all-time batches: {totals.get(str(r['listing_id']), 0)}")
+            verdict = {"pending": " · ⏳ pending admin review",
+                       "live": " · 🟢 visible",
+                       "unknown": " · ❔ visibility unverified"}.get(
+                           str(r.get("delivered") or ""), "")
+            lines.append(f"✅ {name} — batch {r['batch']}: {r['count']} groups"
+                         f"{verdict} · all-time batches: "
+                         f"{totals.get(str(r['listing_id']), 0)}")
     title = (f"autoposter crosspost · {profile_name or 'autoposter'} · "
              f"{'DRY RUN' if dry else 'LIVE'} · {summary['run_id']}")
     return {

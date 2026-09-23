@@ -104,3 +104,20 @@ def test_send_never_raises(monkeypatch):
     monkeypatch.setattr(notify.urllib.request, "urlopen", explode)
     monkeypatch.setattr(notify.time, "sleep", lambda s: None)
     assert notify.send_summary("https://x/y", {}) is False  # False, NOT an exception
+
+def test_crosspost_payload_shows_verdict_on_batch_lines():
+    from poster.notify import build_crosspost_payload
+    summary = {
+        "run_id": "R", "dry_run": False, "aborted": None,
+        "started": "2026-09-23T10:00:00+00:00", "duration_s": 3.0,
+        "published": 1, "staged": 0, "failed": 0, "skipped": 0,
+        "attempted": 1,
+        "listings": [{"listing_id": "L1", "listing_title": "Tahoe",
+                      "batch": 0, "count": 20, "group_ids": [],
+                      "status": "published", "error": None,
+                      "delivered": "pending"}],
+        "totals_crossposted_batches_all_time": {"L1": 2},
+    }
+    desc = build_crosspost_payload(summary)["embeds"][0]["description"]
+    assert "✅ Tahoe — batch 0: 20 groups · ⏳ pending admin review" in desc
+    assert "all-time batches: 2" in desc

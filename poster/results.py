@@ -127,6 +127,8 @@ class CrossResult:
     group_ids: list
     status: str
     error: str | None = None
+    # sampled delivery verdict, live batches only (see poster.crosspost)
+    delivered: str | None = None
 
 
 @dataclass
@@ -141,16 +143,23 @@ class RunRecorder:
     cross_results: list[CrossResult] = field(default_factory=list)
 
     def crosspost(self, listing: Mapping, batch: int, groups: list,
-                  ok: bool, error: str | None = None) -> CrossResult:
-        """One dialog-submission for one listing (groups = [{'id','name'}...])."""
+                  ok: bool, error: str | None = None,
+                  delivered: str | None = None) -> CrossResult:
+        """One dialog-submission for one listing (groups = [{'id','name'}...]).
+
+        delivered: the SAMPLED verify verdict for a real publish — like the
+        group pipeline's, it decorates the row and never gates it.
+        """
         status = (STATUS_STAGED if self.dry_run else STATUS_PUBLISHED) \
             if ok else STATUS_FAILED
+        if not ok or self.dry_run:
+            delivered = None
         res = CrossResult(
             listing_id=str(listing["id"]),
             listing_title=str(listing.get("title") or listing["id"])[:120],
             batch=batch, count=len(groups),
             group_ids=[str(g["id"]) for g in groups],
-            status=status, error=error)
+            status=status, error=error, delivered=delivered)
         self.cross_results.append(res)
         self._append_ledger_cross(res, groups)
         return res
@@ -178,6 +187,8 @@ class RunRecorder:
             "group_names": [str(g.get("name") or "")[:80] for g in groups],
             "status": res.status, "error": res.error, "dry_run": self.dry_run,
         }
+        if res.delivered:
+            line["delivered"] = res.delivered
         with self.ledger_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=False) + "\n")
 

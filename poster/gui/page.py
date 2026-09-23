@@ -284,7 +284,7 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
     <h2>Marketplace listings</h2>
     <div class="tablewrap"><table id="listings">
       <thead><tr><th>id</th><th>title</th><th>price</th><th>approved</th>
-        <th>rejected</th><th class="num">batches</th><th class="num">groups</th></tr></thead>
+        <th>rejected</th><th class="num">batches</th><th class="num">groups</th><th>live?</th></tr></thead>
       <tbody></tbody>
     </table></div>
     <div class="note" id="listingsnote"></div>
@@ -371,6 +371,14 @@ function statusClass(status) {
   return "";
 }
 
+const DELIVERED = { live: ["✓ visible", "ok"], pending: ["⏳ pending", "warn"],
+                    unknown: ["❔ unknown", "dim"] };
+
+function deliveredCell(tr, row) {
+  const dv = DELIVERED[row.delivered] || ["—", "dim"];
+  td(tr, dv[0]).className = dv[1];
+}
+
 function fmtTs(ts) {
   if (!ts) return "never";
   return ts.replace("T", " ").slice(0, 16);
@@ -417,11 +425,7 @@ function renderState(st) {
     td(tr, fmtTs(row.last_ts), "mono");
     const cell = td(tr, row.last_status || "never");
     cell.className = "pill " + statusClass(row.last_status);
-    const dv = { live: ["✓ visible", "ok"], pending: ["⏳ pending", "warn"],
-                 unknown: ["❔ unknown", "dim"] }[row.delivered]
-              || ["—", "dim"];
-    const dcell = td(tr, dv[0]);
-    dcell.className = dv[1];
+    deliveredCell(tr, row);
     td(tr, row.published, "num");
     td(tr, row.attempts, "num");
   }, g.available ? "no joined groups in this snapshot (confirmed empty)"
@@ -442,6 +446,7 @@ function renderState(st) {
     td(tr, row.rejected === null || row.rejected === undefined ? "—" : (row.rejected ? "yes" : "no"));
     td(tr, row.crossposts, "num");
     td(tr, row.crosspost_groups + (row.crosspost_coverage === null ? "" : " (" + row.crosspost_coverage + "%)"), "num");
+    deliveredCell(tr, row);
   }, l.available ? "listings snapshot is empty (confirmed 0 active listings)"
                  : "not fetched yet — no listings.json on disk");
   text($("listingsnote"),
