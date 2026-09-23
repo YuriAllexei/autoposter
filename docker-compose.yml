@@ -10,10 +10,16 @@ services:
     image: autoposter
     container_name: autoposter
     restart: unless-stopped
+    # Run as the HOST user, not root: everything this container writes
+    # (uploads, saved post.txt, ledger lines, the Firefox profile) lands on
+    # bind mounts — as root those files become untouchable from the host
+    # shell AND the native poetry route (root-owned prefs.js breaks native
+    # firefox saves). Override on machines with a different uid:
+    #   AP_UID=1001 AP_GID=1001 ap-gui
+    user: "${AP_UID:-1000}:${AP_GID:-1000}"
     environment:
-      # WSLg: hand the container the X11 display so headed Firefox windows
-      # appear on the Windows desktop exactly like they do natively.
-      DISPLAY: ${DISPLAY:-:0}
+      DISPLAY: ${DISPLAY:-:0}   # WSLg: headed Firefox windows appear on
+      HOME: /tmp                # the Windows desktop, like native runs
     volumes:
       - .:/app                       # code + data/ + .env + .local-capture
       - /tmp/.X11-unix:/tmp/.X11-unix  # X11 socket (headed browser)
@@ -35,8 +41,10 @@ services:
   autoposter-login:
     profiles: ["login"]
     image: autoposter
+    user: "${AP_UID:-1000}:${AP_GID:-1000}"
     environment:
       DISPLAY: ${DISPLAY:-:0}
+      HOME: /tmp
     volumes:
       - .:/app
       - /tmp/.X11-unix:/tmp/.X11-unix

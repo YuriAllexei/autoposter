@@ -579,3 +579,89 @@ def test_crashing_verdict_degrades_to_unknown_not_failure(tmp_path,
     assert n == 1                            # batch still counts as done
     assert rec.cross_results[0].status == STATUS_PUBLISHED
     assert rec.cross_results[0].delivered == "unknown"
+
+
+# ---- _find_more_button: the 220814Z hydration-race regression ----
+
+def _mfl():
+    import poster.flows as fl
+    return fl
+
+
+class _Btn:
+    """Locator stub: behavior driven by a spec dict."""
+
+    def __init__(self, spec, sel, idx=None):
+        self.spec, self.sel, self.idx = spec, sel, idx
+
+    @property
+    def first(self):
+        return self
+
+    def nth(self, i):
+        return _Btn(self.spec, self.sel, i)
+
+    async def wait_for(self, state=None, timeout=None):
+        self.spec.setdefault("waits", []).append(timeout)
+        if not self.spec.get("attaches", True):
+            raise _mfl().PWTimeoutError("waited too long")
+
+    async def count(self):
+        return self.spec["counts"].get(self.sel, 0)
+
+    async def get_attribute(self, _a):
+        if "^=" in self.sel:
+            return self.spec["prefix_labels"][self.idx]
+        return self.spec.get("exact_label", "")
+
+
+class _MorePage:
+    def __init__(self, spec):
+        self.spec = spec
+
+    def locator(self, sel):
+        return _Btn(self.spec, sel)
+
+
+def _find_more(tmp_path, monkeypatch, spec):
+    fl = _mfl()
+    async def no_shot(*_a, **_k):
+        return "evidence.png"
+    monkeypatch.setattr(fl, "dump_evidence", no_shot)
+    cfg = _cfg(tmp_path)
+    page = _MorePage(spec)
+    return asyncio.run(fl._find_more_button(page, "2019 Chevrolet Tahoe LT",
+                                            cfg, lambda *_a: None))
+
+
+def test_more_button_waits_for_hydration_then_finds_it(tmp_path, monkeypatch):
+    exact = '[role="button"][aria-label="Más opciones para 2019 Chevrolet Tahoe LT"]'
+    spec = {"counts": {exact: 1}, "attaches": True}
+    btn = _find_more(tmp_path, monkeypatch, spec)
+    assert btn.sel == exact
+    assert spec["waits"][0] >= 15000     # a REAL condition-wait, not a blink
+
+
+def test_more_button_rescue_scan_survives_label_drift(tmp_path, monkeypatch):
+    fl = _mfl()
+    exact = f'[role="button"][aria-label="{fl.CROSSPOST_MORE_PREFIX}2019 Chevrolet Tahoe LT"]'
+    prefix = f'[role="button"][aria-label^="{fl.CROSSPOST_MORE_PREFIX}"]'
+    # drift INSIDE the title part only (case + doubled spaces) — that is
+    # what the folded rescue scan is for
+    spec = {"counts": {exact: 0, prefix: 1}, "attaches": False,
+            "prefix_labels": ["Más opciones para 2019 CHEVROLET  TAHOE LT"]}
+    btn = _find_more(tmp_path, monkeypatch, spec)   # folded rescue hit
+    assert btn.sel == prefix and btn.idx == 0
+
+
+def test_more_button_absent_raises_with_evidence(tmp_path, monkeypatch):
+    fl = _mfl()
+    exact = f'[role="button"][aria-label="{fl.CROSSPOST_MORE_PREFIX}2019 Chevrolet Tahoe LT"]'
+    prefix = f'[role="button"][aria-label^="{fl.CROSSPOST_MORE_PREFIX}"]'
+    spec = {"counts": {exact: 0, prefix: 0}, "attaches": False,
+            "prefix_labels": []}
+    try:
+        _find_more(tmp_path, monkeypatch, spec)
+        raise AssertionError("must raise FlowError")
+    except fl.FlowError as e:
+        assert "0 folded matches" in str(e) and "evidence.png" in str(e)

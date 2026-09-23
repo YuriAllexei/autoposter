@@ -169,7 +169,14 @@ td .pill { font-size:10.5px; padding:2px 9px; }
 .cars { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
   gap:12px; }
 .car { background:rgba(9,12,18,.45); border:1px solid var(--line);
-  border-radius:12px; padding:12px 13px; }
+  border-radius:12px; padding:12px 13px; cursor:pointer;
+  transition:border-color .15s ease, box-shadow .15s ease; }
+.car.paste-target { border-color:rgba(122,162,255,.55);
+  box-shadow:0 0 0 3px rgba(122,162,255,.12); }
+.ptbadge { margin-left:8px; font:600 9.5px var(--mono); letter-spacing:.08em;
+  text-transform:uppercase; color:var(--acc);
+  border:1px solid rgba(122,162,255,.45); border-radius:99px; padding:1px 7px;
+  vertical-align:1px; }
 .car h3 { margin:0 0 10px; font:650 12px/1.4 var(--mono); color:var(--ink2); }
 .thumbs { display:flex; flex-wrap:wrap; gap:10px; min-height:72px;
   align-items:flex-start; }
@@ -265,8 +272,10 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
       <input type="text" id="newcar" placeholder="05_new_folder"
              autocomplete="off" spellcheck="false">
       <button class="ghost" id="b-addcar">Add car folder</button>
-      <span class="note">Folder order = car order in the post · uploads need
-        the folder to exist first</span>
+      <span class="note" id="carnote">click a folder to make it the
+        <b>paste target</b>, then <b>Ctrl+V</b> drops clipboard images straight
+        into it · folder order = car order in the post · uploads need the
+        folder to exist first</span>
     </div>
   </div>
 
@@ -598,6 +607,58 @@ setInterval(pollLog, 1000);
 let postBase = "";
 let postDirty = false;
 
+async function uploadFiles(car, files) {
+  let done = 0, err = "";
+  setNote("carnote", "uploading " + files.length + " image(s) into " + car + " …");
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const name = pasteAwareName(f, i);
+    const b64 = await blobToB64(f);
+    const out = await postJson("/api/content/photo",
+                               { car: car, name: name, data_b64: b64 });
+    if (out && out.error) err = out.error; else done++;
+  }
+  await refreshContent(false);
+  setNote("carnote", err
+    ? "uploaded " + done + " into " + car + " — rejected: " + err
+    : "uploaded " + done + " image(s) into " + car + " · now paste or keep editing",
+    !!err);
+}
+
+/* Clipboard screenshots arrive nameless (or as "image.png") — stamp them so
+   repeated pastes never clobber each other; real file names are kept. */
+function pasteAwareName(f, i) {
+  const n = (f.name || "").trim();
+  if (n && n.toLowerCase() !== "image.png" && n.toLowerCase() !== "blob")
+    return n;
+  const ext = ((f.type || "image/png").split("/")[1] || "png")
+    .replace("jpeg", "jpg");
+  const ts = new Date().toISOString().replace(/[-:]/g, "").replace(/\\.\\d+Z$/, "");
+  return "pasted_" + ts + "_" + i + "." + ext;
+}
+
+document.addEventListener("paste", async (e) => {
+  const dt = e.clipboardData;
+  if (!dt) return;
+  const imgs = [];
+  for (const f of dt.files || [])
+    if ((f.type || "").startsWith("image/")) imgs.push(f);
+  if (!imgs.length)
+    for (const it of dt.items || [])
+      if (it.kind === "file" && (it.type || "").startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) imgs.push(f);
+      }
+  if (!imgs.length) return;          // plain text keeps pasting as text
+  e.preventDefault();
+  if (!pasteTarget) {
+    setNote("carnote", "clipboard has images but no car folder exists — " +
+          "create one first, then Ctrl+V", true);
+    return;
+  }
+  await uploadFiles(pasteTarget, imgs);
+});
+
 function setNote(id, msg, bad) {
   const n = $(id);
   text(n, msg);
@@ -622,14 +683,31 @@ function blobToB64(file) {
   });
 }
 
+let pasteTarget = "";       // folder Ctrl+V lands images in
+let carsCache = [];         // last render data, for target switches
+
 function renderCars(cars) {
+  carsCache = cars || [];
   const wrap = $("cars");
   wrap.replaceChildren();
+  if (cars.length && !cars.some((c) => c.name === pasteTarget))
+    pasteTarget = cars[0].name;          // auto-pick (or recover a deleted one)
   for (const car of cars) {
     const box = document.createElement("div");
     box.className = "car";
+    if (car.name === pasteTarget) {
+      box.classList.add("paste-target");
+      box.title = "Ctrl+V pastes clipboard images into this folder";
+    }
+    box.onclick = () => { pasteTarget = car.name; renderCars(carsCache); };
     const h = document.createElement("h3");
     text(h, car.name + " · " + car.photos.length + " photo(s)");
+    if (car.name === pasteTarget) {
+      const badge = document.createElement("span");
+      badge.className = "ptbadge";
+      text(badge, "paste target");
+      h.appendChild(badge);
+    }
     box.appendChild(h);
 
     const thumbs = document.createElement("div");
@@ -675,15 +753,8 @@ function renderCars(cars) {
       const files = picker.files;
       if (!files || !files.length) return;
       up.disabled = true;
-      for (const f of files) {
-        const b64 = await blobToB64(f);
-        const out = await postJson("/api/content/photo",
-                                   { car: car.name, name: f.name,
-                                     data_b64: b64 });
-        if (out && out.error) setNote("ptnote", "upload failed: " + out.error, true);
-      }
+      await uploadFiles(car.name, Array.from(files));
       up.disabled = false;
-      refreshContent(false);
     };
     const delcar = document.createElement("button");
     delcar.className = "ghost";

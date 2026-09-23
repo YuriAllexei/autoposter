@@ -1041,3 +1041,11 @@ def test_page_has_delivery_column_for_listings_too():
     html = render_page()
     assert html.count("<th>live?</th>") == 2   # groups AND listings cards
     assert "DELIVERED" in html and "deliveredCell" in html
+
+
+def test_page_has_clipboard_paste_affordances():
+    html = render_page()
+    assert 'addEventListener("paste"' in html      # global Ctrl+V capture
+    assert "paste-target" in html and "ptbadge" in html
+    assert "pasteAwareName" in html                # nameless screenshots renamed
+    assert "paste target" in html.lower()          # the hint explains it

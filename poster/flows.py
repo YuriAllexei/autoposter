@@ -431,28 +431,49 @@ def _dialog_response_filter():
     return ok
 
 
+MORE_ATTACH_WAIT_MS = 20000   # condition-wait, like listing_card_titles
+
+
+async def _find_more_button(page: Page, title: str, cfg: Config,
+                            log: log_fn):
+    """The '...' locator of one listing card, tolerant of FB's async
+    hydration.
+
+    RACE LESSON (live 2026-09-23, run 20260923T220814Z): the old code ran an
+    INSTANT count() right after a fresh goto and blinked at a card whose
+    aria-label attached ~1s later — the failure screenshot literally showed
+    the button present. Condition-wait first (up to MORE_ATTACH_WAIT_MS),
+    then keep the proven folded-title rescue scan for drifted labels.
+    """
+    sel = f'[role="button"][aria-label="{CROSSPOST_MORE_PREFIX}{title}"]'
+    btn = page.locator(sel).first
+    try:
+        await btn.wait_for(state="attached", timeout=MORE_ATTACH_WAIT_MS)
+    except PWTimeoutError:
+        pass  # exact label never arrived: the rescue scan reports it properly
+    if await btn.count():
+        return btn
+    all_btns = page.locator(
+        f'[role="button"][aria-label^="{CROSSPOST_MORE_PREFIX}"]')
+    hits = []
+    for i in range(await all_btns.count()):
+        al = await all_btns.nth(i).get_attribute("aria-label") or ""
+        if _norm(al.partition(CROSSPOST_MORE_PREFIX)[2]) == _norm(title):
+            hits.append(all_btns.nth(i))
+    if len(hits) != 1:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crosspost_no_button")
+        raise FlowError(f"no unique MORE button for {title!r} "
+                        f"({len(hits)} folded matches). Evidence: {shot}")
+    return hits[0]
+
+
 async def open_crosspost_dialog(page: Page, title: str, cfg: Config,
                                 log: log_fn = print) -> tuple[list, int, str]:
     """Card '...' -> exact 'Publicar en más lugares' -> dialog. Returns
     (candidate groups, cap, listing id from the dialog payload). Raises
     FlowError with evidence otherwise."""
-    sel = f'[role="button"][aria-label="{CROSSPOST_MORE_PREFIX}{title}"]'
-    btn = page.locator(sel).first
-    if not await btn.count():
-        all_btns = page.locator(
-            f'[role="button"][aria-label^="{CROSSPOST_MORE_PREFIX}"]')
-        hits = []
-        for i in range(await all_btns.count()):
-            al = await all_btns.nth(i).get_attribute("aria-label") or ""
-            if _norm(al.partition(CROSSPOST_MORE_PREFIX)[2]) == _norm(title):
-                hits.append(all_btns.nth(i))
-        if len(hits) != 1:
-            shot = await dump_evidence(page, cfg.screenshot_dir,
-                                       "crosspost_no_button")
-            raise FlowError(f"no unique MORE button for {title!r} "
-                            f"({len(hits)} folded matches). Evidence: {shot}")
-        btn = hits[0]
-
+    btn = await _find_more_button(page, title, cfg, log)
     await human_sleep(cfg, log, "before opening the listing '...' menu",
                       cfg.crosspost_action_min, cfg.crosspost_action_max)
     async with page.expect_response(_dialog_response_filter(),
