@@ -91,8 +91,13 @@ def main(argv: list[str] | None = None) -> int:
              else GuiPaths.from_config(cfg))
     buffer = RingBuffer()
     manager = RunManager(cfg.screenshot_dir.parent, buffer)
+    #: THE wiring the flag exists for: inside a container, 127.0.0.1 is a
+    #: dead end (the published port arrives on eth0). --bind-container must
+    #: actually bind 0.0.0.0, not merely be allowed to.
+    host = "0.0.0.0" if args.bind_container else "127.0.0.1"
     httpd = create_server(paths, manager, identity_view(cfg),
-                      port=args.port, container_bind=args.bind_container)
+                      port=args.port, host=host,
+                      container_bind=args.bind_container)
     port = httpd.server_address[1]
     url = f"http://127.0.0.1:{port}/"
 

@@ -887,3 +887,39 @@ def test_container_bind_is_the_only_way_off_loopback(tmp_path):
     finally:
         httpd.server_close()
 
+
+
+def test_bind_container_flag_reaches_the_real_bind(tmp_path, monkeypatch):
+    """The container bug this pins: --bind-container used to flip a validator
+    ALLOWANCE only; create_server still got host=127.0.0.1, so the published
+    port found nobody home inside the container."""
+    import poster.gui.__main__ as gm
+    seen: dict = {}
+
+    class _Httpd:
+        server_address = ("0.0.0.0", 8765)
+        def serve_forever(self):
+            raise KeyboardInterrupt
+        def server_close(self):
+            pass
+
+    def fake_create_server(paths, manager, identity, host="127.0.0.1",
+                           port=8765, container_bind=False):
+        seen["host"] = host
+        seen["container_bind"] = container_bind
+        return _Httpd()
+
+    monkeypatch.setattr(gm, "create_server", fake_create_server)
+    monkeypatch.setattr(gm, "RunManager",
+                        lambda *a, **k: __import__("types").SimpleNamespace(
+                            available=dict, shutdown=lambda **kw: False))
+    import signal as _sig
+    held = [_sig.getsignal(_sig.SIGINT), _sig.getsignal(_sig.SIGTERM)]
+    try:
+        gm.main(["--port", "0", "--bind-container"])
+        assert seen["host"] == "0.0.0.0" and seen["container_bind"] is True
+        gm.main(["--port", "0"])
+        assert seen["host"] == "127.0.0.1" and seen["container_bind"] is False
+    finally:
+        _sig.signal(_sig.SIGINT, held[0])
+        _sig.signal(_sig.SIGTERM, held[1])
