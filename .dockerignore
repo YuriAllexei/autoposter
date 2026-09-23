@@ -1,0 +1,5 @@
+# The image bakes NO repo content (everything arrives via the compose
+# bind-mount), so the build context can be empty — keeps builds instant
+# and prevents .local-capture (cookies!) from ever entering an image layer.
+*
+!.dockerignore

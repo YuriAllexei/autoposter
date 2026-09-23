@@ -181,17 +181,31 @@ class Dashboard:
 
 def create_server(paths: state_mod.GuiPaths, manager: RunManager,
                   identity: dict[str, Any] | None = None,
-                  host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
+                  host: str = "127.0.0.1", port: int = 8765,
+                  container_bind: bool = False) -> ThreadingHTTPServer:
     """Build (but do not start) the loopback-only dashboard server.
 
     Returning the server lets callers read `server.server_address[1]` for the
     real port — that is how the smoke test binds port 0 (ephemeral) instead of
     racing a fixed port.
+
+    `container_bind=True` is the ONE sanctioned way out of loopback, and it
+    exists for Docker only: a server on 127.0.0.1 is unreachable through a
+    published port (connections arrive on the container's eth0). Inside a
+    container network namespace that is safe BY CONSTRUCTION — but only as
+    long as the compose mapping keeps the HOST side at 127.0.0.1
+    ("127.0.0.1:8765:8765"), so the unauthenticated dashboard never meets a
+    network. The flag is deliberate: typing --bind-container on a bare host
+    is an informed decision, not a default.
     """
-    if host not in ("127.0.0.1", "localhost", "::1"):
+    allowed = {"127.0.0.1", "localhost", "::1"}
+    if container_bind:
+        allowed |= {"0.0.0.0", "::"}
+    if host not in allowed:
         raise ValueError(
             f"refusing to bind {host!r}: the dashboard can publish real posts "
-            "and has no authentication — loopback only")
+            "and has no authentication — loopback only (in a container use "
+            "--bind-container AND keep the host mapping on 127.0.0.1)")
     dashboard = Dashboard(paths, manager, identity)
     httpd = ThreadingHTTPServer((host, port), DashboardHandler)
     httpd.dashboard = dashboard  # type: ignore[attr-defined]

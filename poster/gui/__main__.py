@@ -3,8 +3,9 @@
 Mirrors `poster.main`'s conventions: argparse, config loaded from .env via
 `load_config()`, UTC-timestamped logging. Two deliberate differences:
 
-* the port defaults to 8765 and the host is NOT configurable — see
-  `poster.gui.server.create_server` for why loopback-only is not a knob.
+* the port defaults to 8765 and the host is NOT a free knob — see
+  `poster.gui.server.create_server`; `--bind-container` is the single
+  sanctioned exception, built for the docker-compose setup.
 * opening the page in a browser is opt-in (`--open`), because a dashboard
   started over SSH/CI must not try to launch anything.
 """
@@ -72,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "0 picks an ephemeral port)")
     ap.add_argument("--open", dest="open_browser", action="store_true",
                     help="open the dashboard in the default browser once it is up")
+    ap.add_argument("--bind-container", dest="bind_container",
+                    action="store_true",
+                    help="bind 0.0.0.0 so a Docker published port can reach "
+                         "the server — ONLY correct inside a container whose "
+                         "compose maps 127.0.0.1:8765:8765 on the host side")
     ap.add_argument("--root", default=None,
                     help="override the capture root (default: the parent of "
                          "AP_SCREENSHOT_DIR, i.e. .local-capture)")
@@ -85,7 +91,8 @@ def main(argv: list[str] | None = None) -> int:
              else GuiPaths.from_config(cfg))
     buffer = RingBuffer()
     manager = RunManager(cfg.screenshot_dir.parent, buffer)
-    httpd = create_server(paths, manager, identity_view(cfg), port=args.port)
+    httpd = create_server(paths, manager, identity_view(cfg),
+                      port=args.port, container_bind=args.bind_container)
     port = httpd.server_address[1]
     url = f"http://127.0.0.1:{port}/"
 

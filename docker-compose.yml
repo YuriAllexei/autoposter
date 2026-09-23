@@ -1,0 +1,47 @@
+name: autoposter
+
+services:
+  # The dashboard (default) — and the workhorse for one-off commands:
+  #   docker compose up -d                                   # dashboard on :8765
+  #   docker compose run --rm autoposter python -m poster.main --dry-run
+  #   docker compose run --rm autoposter python -m poster.crosspost --list
+  autoposter:
+    build: .
+    image: autoposter
+    container_name: autoposter
+    restart: unless-stopped
+    environment:
+      # WSLg: hand the container the X11 display so headed Firefox windows
+      # appear on the Windows desktop exactly like they do natively.
+      DISPLAY: ${DISPLAY:-:0}
+    volumes:
+      - .:/app                       # code + data/ + .env + .local-capture
+      - /tmp/.X11-unix:/tmp/.X11-unix  # X11 socket (headed browser)
+      - /mnt/wslg:/mnt/wslg:ro         # WSLg runtime + fonts
+    ports:
+      # HOST side pinned to loopback: the container binds 0.0.0.0 (required
+      # for published ports to reach it at all) but the unauthenticated
+      # dashboard still never appears on your LAN — same security property
+      # as the native run.
+      - "127.0.0.1:8765:8765"
+    command: python -m poster.gui --port 8765 --bind-container
+
+  # One-time ritual: FIRST login inside a container (or any time cookies
+  # expire). Opens headed Firefox on the Facebook login page; sign in by
+  # hand (2FA included — we never touch the credentials), then press
+  # q + Enter in this terminal to save and quit. The profile is the
+  # bind-mounted .local-capture/profiles/facebook, so every later
+  # `docker compose run`/`up` reuses the session.
+  autoposter-login:
+    profiles: ["login"]
+    image: autoposter
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+    volumes:
+      - .:/app
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /mnt/wslg:/mnt/wslg:ro
+    command: python scraping_recorder/record_session.py
+      --url https://www.facebook.com
+      --profile .local-capture/profiles/facebook
+      --out .local-capture/manual_session

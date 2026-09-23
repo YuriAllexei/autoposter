@@ -867,3 +867,23 @@ def test_page_shows_live_column_and_legend():
     assert "<th>live?</th>" in html
     assert "test run" in html and "exit code" in html
     assert "head-flex" in html                  # hint lives in the header row
+
+def test_container_bind_is_the_only_way_off_loopback(tmp_path):
+    import pytest as _pt
+
+    from poster.gui.server import create_server
+    mgr = RunManager(Path("."), RingBuffer(), python="PY",
+                     probe=lambda m: True)
+    paths = GuiPaths.from_root(tmp_path)
+    # default: loopback only — a bare host can never accidentally LAN-bind
+    with _pt.raises(ValueError):
+        create_server(paths, mgr, host="0.0.0.0")
+    # explicit container mode: allowed (compose maps the HOST side to
+    # 127.0.0.1, so this still never meets a network)
+    httpd = create_server(paths, mgr, host="0.0.0.0",
+                          container_bind=True, port=0)
+    try:
+        assert httpd.server_address[0] == "0.0.0.0"
+    finally:
+        httpd.server_close()
+
