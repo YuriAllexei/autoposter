@@ -1,4 +1,4 @@
-"""Entry point: `python -m poster.gui [--port 8765] [--no-browser]`.
+"""Entry point: `python -m poster.gui [--port 8765] [--open]`.
 
 Mirrors `poster.main`'s conventions: argparse, config loaded from .env via
 `load_config()`, UTC-timestamped logging. Two deliberate differences:
@@ -11,9 +11,11 @@ Mirrors `poster.main`'s conventions: argparse, config loaded from .env via
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import webbrowser
 from datetime import UTC, datetime
+from pathlib import Path
 
 from ..config import load_config
 from .runner import RingBuffer, RunManager
@@ -22,6 +24,35 @@ from .state import GuiPaths, identity_view
 
 DEFAULT_PORT = 8765
 
+
+def _on_wsl() -> bool:
+    """True inside WSL (the only host shape this project runs on where the
+    user's real browser is on the Windows side)."""
+    try:
+        return "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        return False
+
+
+def open_in_browser(url: str) -> str:
+    """Open the dashboard URL in the user's browser; returns the channel
+    used (for the log line). webbrowser.open inside WSL hits xdg-open,
+    which knows no browser there (user's is Windows-side) — so on WSL the
+    first attempt is `cmd.exe /c start`."""
+    if _on_wsl():
+        for exe in ("cmd.exe", "/mnt/c/Windows/System32/cmd.exe"):
+            try:
+                subprocess.run([exe, "/c", "start", "", url],
+                               check=False, timeout=10, capture_output=True)
+                return f"windows ({exe})"
+            except (OSError, subprocess.SubprocessError):
+                continue
+    try:
+        if webbrowser.open(url):
+            return "webbrowser"
+    except webbrowser.Error:
+        pass
+    return "none — open the URL by hand"
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
@@ -60,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[{stamp}] Ctrl-C to stop (runs already started keep their own "
           "process group; use the Kill button to stop one)")
     if args.open_browser:
-        webbrowser.open(url)
+        print(f"[{stamp}] --open: browser via {open_in_browser(url)}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

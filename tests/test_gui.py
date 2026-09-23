@@ -352,6 +352,31 @@ def test_manager_streams_child_output_into_the_buffer(tmp_path):
     assert mgr.status()["running"] is False and mgr.status()["rc"] == 0
 
 
+def test_open_in_browser_prefers_windows_cmd_on_wsl(monkeypatch):
+    import poster.gui.__main__ as gm
+    calls = []
+    monkeypatch.setattr(gm, "_on_wsl", lambda: True)
+    monkeypatch.setattr(gm.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd))
+    assert "windows" in gm.open_in_browser("http://127.0.0.1:8765/")
+    assert calls[0][:4] == ["cmd.exe", "/c", "start", ""]
+    assert calls[0][4] == "http://127.0.0.1:8765/"
+
+
+def test_open_in_browser_falls_back_when_cmd_missing(monkeypatch):
+    import poster.gui.__main__ as gm
+    monkeypatch.setattr(gm, "_on_wsl", lambda: True)
+
+    def boom(cmd, **kw):
+        raise OSError("no cmd.exe")
+
+    monkeypatch.setattr(gm.subprocess, "run", boom)
+    opened = []
+    monkeypatch.setattr(gm.webbrowser, "open", lambda u: opened.append(u) or True)
+    assert "webbrowser" in gm.open_in_browser("http://x/")
+    assert opened == ["http://x/"]
+
+
 def test_child_clis_run_from_the_project_root_not_the_capture_root(tmp_path):
     """2026-09-23 live bug: cwd was the capture root (.local-capture), so a
     spawned `-m poster.x` died with ModuleNotFoundError. The repo is not
