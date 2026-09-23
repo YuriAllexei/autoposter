@@ -270,10 +270,18 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
                 log(f"abort: joined-groups fetch failed: {e}")
                 finish(f"run aborted: joined-groups fetch failed: {e}", log)
                 return 4
-            planned = select_targets(joined, last_attempt_ts(cfg.ledger_file),
-                                     cfg.max_posts_per_run, only=only_group)
-            log(f"joined {len(joined)} group(s); this run posts to "
-                f"{[g['name'][:40] for g in planned] or '[]'}")
+            last = last_attempt_ts(cfg.ledger_file)
+            planned = select_targets(joined, last, cfg.max_posts_per_run,
+                                     only=only_group)
+            # full self-audit view: every joined group, its rotation clock
+            # and which ones THIS run will attempt ('*')
+            log(f"joined {len(joined)} group(s) as {cfg.identity_label!r} "
+                f"(* = this run):")
+            chosen = {g["id"] for g in planned}
+            for g in joined:
+                when = (last.get(g["id"]) or "never")[:16].replace("T", " ")
+                star = "*" if g["id"] in chosen else " "
+                log(f"  {star} {g['id']:<18} {when:<16} {g['name'][:60]}")
             if not planned:
                 finish("run ended: no target groups selected"
                        + (f" (filter {only_group!r} matched nothing)"
