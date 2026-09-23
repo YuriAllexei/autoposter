@@ -31,9 +31,36 @@ ap-groups() {
   cd "$_AP_REPO" && poetry run python -m poster.main --list-groups
 }
 
-# ap-gui [flags] — localhost dashboard (http://127.0.0.1:8765) + run buttons
-# for both pipelines. --open is on by default (WSL-aware: opens the Windows
-# browser); pass extra flags through, e.g. ap-gui --port 9000
+# ap-gui [up|down|logs|run <cmd>|login|status] — the app via docker compose.
+# Default (bare `ap-gui`): bring the stack up. Code + .env + data/post.txt +
+# car_photos + the Firefox profile are BIND-MOUNTED: host edits apply live;
+# rebuild only when a dependency changes (docker compose build). Reach the
+# dashboard from your WINDOWS browser: http://localhost:8765/
 ap-gui() {
-  cd "$_AP_REPO" && poetry run python -m poster.gui --open "$@"
+  cd "$_AP_REPO" || return 1
+  case "${1:-up}" in
+    up)
+      docker compose up -d &&
+      echo "dashboard: http://localhost:8765/  (stop with: ap-gui down)" ;;
+    down|stop) docker compose down ;;
+    logs) shift; docker compose logs -f "$@" ;;
+    status) docker compose ps ;;
+    run) shift; docker compose run --rm autoposter "$@" ;;
+    login) docker compose run --rm --profile login autoposter-login ;;
+    -h|--help|help)
+      cat <<'TXT'
+ap-gui [up|down|logs|run <cmd>|login|status]   (docker compose front-end)
+  up      default: start the stack -> http://localhost:8765/ (Windows browser)
+  down    stop everything container-side
+  logs    follow the dashboard/run logs
+  run     one-off inside the container, e.g.
+            ap-gui run python -m poster.main --dry-run
+            ap-gui run python -m poster.crosspost --list
+  login   one-time headed Firefox Facebook sign-in (shared profile)
+  status  container states
+TXT
+      ;;
+    *) echo "ap-gui: unknown subcommand '$1' — try: up down logs run login" >&2
+       return 2 ;;
+  esac
 }

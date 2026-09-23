@@ -90,7 +90,9 @@ Done. Next steps on a fresh machine:
   4. ap-groups            # live joined-group list of the configured identity
                           # (+ rotation state from the ledger)
   5. ap-timeline --full   # time-ordered review of the newest dump
-  6. ap-gui               # control dashboard in the browser (dry-run unless
-                          # .env says AP_DRY_RUN=false; live runs also need
-                          # typing the PUBLICAR phrase)
+  6. ap-gui               # control dashboard via docker compose
+                          # (http://127.0.0.1:8765; stop: ap-gui down).
+                          # Pipelines: ap-gui run python -m poster.main ...
+                          # dry-run unless .env says AP_DRY_RUN=false; live
+                          # runs also need typing the PUBLICAR phrase
 EOF

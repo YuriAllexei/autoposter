@@ -51,9 +51,16 @@ poetry run python -m poster.crosspost --listing TAHOE --max 2   # filter listing
 # rc: 0 ≥1 batch staged/published · 1 nothing to do · 2/3 identity · 4 --live refused.
 # Ground truth: recording 20260923T021450Z_marketplace_article_fetching_and_mass_pu.
 
-# DASHBOARD (localhost:8765, no auth — loopback bind is deliberate; one run
-# at a time; a LIVE run additionally requires typing PUBLICAR + .env edit):
-poetry run python -m poster.gui --open
+# DASHBOARD — docker is the primary route (code bind-mounted: edits to code,
+# data/post.txt, car_photos and .env are LIVE inside the container; rebuild
+# only on dependency changes):
+ap-gui                          # compose up -d -> http://localhost:8765/ (Windows browser)
+ap-gui down | logs | login      # stop | follow logs | one-time headed FB login
+ap-gui run python -m poster.crosspost --dry-run   # any pipeline, in-container
+# Native (no docker): poetry run python -m poster.gui --open — never run both
+# at once: one Firefox profile, one owner (409/busy lock protects you).
+# No auth — loopback-pinned HOST side of the compose map is deliberate; one
+# run at a time; a LIVE run additionally requires typing PUBLICAR + .env edit.
 
 # RECORD a flow (ground truth; NEVER commit dumps — they hold cookies).
 # --url optional (no url = bare browser). Dumps land under
@@ -83,7 +90,7 @@ poetry run python -m poster.notify --stats  # all-time published per group
 ```
 
 Shell helpers (`shell/autoposter.sh`, sourced by setup.sh; bash+zsh):
-`ap-record [URL]`, `ap-timeline [dir] [--full]`, `ap-groups`, `ap-gui`.
+`ap-record [URL]`, `ap-timeline [dir] [--full]`, `ap-groups`, `ap-gui [up|down|logs|run <cmd>|login]` (docker-compose dashboard wrapper — see below).
 Recorder console: `s`+Enter screenshot+note, `q`+Enter quit & flush.
 Submodule gotchas: see `scraping_recorder/AGENTS.md`.
 
