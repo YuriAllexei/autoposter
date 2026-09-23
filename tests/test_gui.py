@@ -10,6 +10,7 @@ tests never read, mutate or depend on the real .local-capture artifacts.
 """
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -923,3 +924,98 @@ def test_bind_container_flag_reaches_the_real_bind(tmp_path, monkeypatch):
     finally:
         _sig.signal(_sig.SIGINT, held[0])
         _sig.signal(_sig.SIGTERM, held[1])
+
+
+# ---- content editing: post.txt + car_photos ----
+
+def _PNG():
+    import base64
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+        "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
+def test_content_read_roundtrip_and_post_save(tmp_path):
+    from poster.gui import content as c
+    cap = tmp_path / "cap"
+    (tmp_path / "data").mkdir()
+    st = c.read_content(cap)
+    assert st["post_exists"] is False and st["cars"] == []
+
+    out = c.save_post(cap, "🚗 2019 TAHOE LT\r\n$340,000")
+    pf = tmp_path / "data" / "post.txt"
+    assert pf.read_bytes() == "🚗 2019 TAHOE LT\n$340,000\n".encode()
+    st = c.read_content(cap)
+    assert st["post_exists"] and "TAHOE" in st["post_text"]
+    assert st["data_dir"].endswith("/data")
+    assert out["ok"]
+
+
+def test_content_path_guards(tmp_path):
+    import pytest as _pt
+
+    from poster.gui import content as c
+    cap = tmp_path / "cap"
+    data = tmp_path / "data"
+    (data / "car_photos" / "01_car").mkdir(parents=True)
+    with _pt.raises(c.ContentError):
+        c.add_car(cap, "../evil")
+    with _pt.raises(c.ContentError):
+        c.add_car(cap, "car_no_number")
+    with _pt.raises(c.ContentError):
+        c.save_photo(cap, "01_car", "../escape.png", _PNG())
+    with _pt.raises(c.ContentError):
+        c.save_photo(cap, "01_car", "virus.exe", _PNG())
+    with _pt.raises(c.ContentError):
+        c.resolve_image(cap, "01_car", "ghost.png")
+    # legit
+    out = c.save_photo(cap, "01_car", "front.png", _PNG())
+    assert out["ok"] and (data / "car_photos" / "01_car" / "front.png").is_file()
+    st = c.read_content(cap)
+    assert st["cars"][0]["photos"][0]["name"] == "front.png"
+    assert c.delete_photo(cap, "01_car", "front.png")["ok"]
+    assert c.add_car(cap, "02_tahoe")["ok"]
+    assert c.delete_car(cap, "02_tahoe")["ok"]
+
+
+def test_content_api_endpoints(live_server):
+    base, _manager, _buffer = live_server
+    # populated_root(tmp) has no data/ sibling? it is tmp_path itself as cap ->
+    # data dir = tmp_path.parent/"data": keep everything inside the API calls.
+    code, body = _post(base + "/api/content/post", {"text": "hello car"})
+    assert code == 200 and body["ok"]
+    _st, _ct, raw = _get(base + "/api/content")
+    import json as _j
+    st = _j.loads(raw)
+    assert "hello car" in st["post_text"]
+
+    code, body = _post(base + "/api/content/car", {"name": "01_test"})
+    assert code == 200, body
+    code, body = _post(base + "/api/content/photo",
+                       {"car": "01_test", "name": "a.png",
+                        "data_b64": base64.b64encode(_PNG()).decode()})
+    assert code == 200 and body["ok"], body
+    code, ct, blob = _get(base + "/api/content/image?car=01_test&name=a.png")
+    assert code == 200 and blob == _PNG() and "image/png" in ct
+    # traversal + bad type rejected at the HTTP layer
+    code, body = _post(base + "/api/content/photo",
+                       {"car": "01_test", "name": "../x.png",
+                        "data_b64": base64.b64encode(_PNG()).decode()})
+    assert code == 400
+    code, body = _post(base + "/api/content/car", {"name": "../out"})
+    assert code == 400
+    code, body = _post(base + "/api/content/photo/delete",
+                       {"car": "01_test", "name": "a.png"})
+    assert code == 200
+    code, body = _post(base + "/api/content/car/delete", {"name": "01_test"})
+    assert code == 200
+
+
+def test_page_has_content_editor():
+    html = render_page()
+    for needle in ('id="ptext"', "b-save-post", 'id="cars"', "b-addcar",
+                   "data/post.txt", "data/car_photos"):
+        assert needle in html, needle
+    # the no-CDN rule keeps a src= attribute OUT of the template (JS assigns
+    # img.src at runtime) — double-check the editor did not smuggle one in
+    assert "src=" not in html

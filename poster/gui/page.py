@@ -18,163 +18,309 @@ PAGE_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>autoposter · control</title>
 <style>
-  :root {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1d212a; --line:#272c37;
-    --fg:#e6e9ef; --dim:#9aa3b2; --ok:#2ecc71; --warn:#f1c40f;
-    --bad:#e74c3c; --accent:#4f8cff; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { padding:14px 18px; border-bottom:1px solid var(--line);
-           background:var(--panel); position:sticky; top:0; z-index:5; }
-  h1 { margin:0 0 6px; font-size:16px; letter-spacing:.3px; }
-  h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase;
-       letter-spacing:.08em; color:var(--dim); }
-  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  .wrap { padding:16px 18px 40px; display:grid; gap:16px;
-          grid-template-columns:1fr; max-width:1500px; }
-  @media (min-width:1100px) { .cols { display:grid; gap:16px;
-          grid-template-columns:1fr 1fr; } }
-  .card { background:var(--panel); border:1px solid var(--line);
-          border-radius:10px; padding:14px; overflow:hidden; }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px;
-          font-size:12px; border:1px solid var(--line); background:var(--panel2);
-          color:var(--dim); }
-  .pill.ok { color:var(--ok); border-color:#1f6b3f; }
-  .pill.warn { color:var(--warn); border-color:#6b5d1f; }
-  .pill.bad { color:var(--bad); border-color:#6b2420; }
-  .pill.live { color:#fff; background:#8b1e1e; border-color:#c0392b;
-               font-weight:600; }
-  button { background:var(--panel2); color:var(--fg); border:1px solid var(--line);
-           border-radius:7px; padding:7px 12px; font-size:13px; cursor:pointer; }
-  button:hover:not(:disabled) { border-color:var(--accent); }
-  button:disabled { opacity:.45; cursor:not-allowed; }
-  button.danger { background:#3a1a1a; border-color:#6b2420; color:#ffbdb6; }
-  button.danger:hover:not(:disabled) { border-color:var(--bad); }
-  input[type=text] { background:#0c0e12; color:var(--fg);
-        border:1px solid var(--line); border-radius:7px; padding:7px 10px;
-        font-family:var(--mono); width:150px; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
-          vertical-align:top; }
-  th { color:var(--dim); font-weight:600; font-size:11px;
-       text-transform:uppercase; letter-spacing:.06em; white-space:nowrap; }
-  td.num { text-align:right; font-family:var(--mono); }
-  .scroll { max-height:340px; overflow:auto; }
-  .mono { font-family:var(--mono); font-size:12px; }
-  .dim { color:var(--dim); }
-  .empty { color:var(--dim); font-style:italic; padding:8px 0; }
-  #log { background:#0b0d11; border:1px solid var(--line); border-radius:8px;
-         padding:10px; height:300px; overflow:auto; white-space:pre-wrap;
-         word-break:break-word; font-family:var(--mono); font-size:12px;
-         margin:0; }
-  .stat { display:flex; gap:18px; flex-wrap:wrap; margin-top:8px; }
-  .stat div { min-width:96px; }
-  .stat b { display:block; font-size:18px; font-family:var(--mono); }
-  .stat span { color:var(--dim); font-size:11px; text-transform:uppercase; }
-  .note { color:var(--dim); font-size:12px; margin-top:8px; }
-  .err { color:var(--bad); }
-  .ok { color:var(--ok); }
-  .warn { color:var(--warn); }
-  .head-flex { display:flex; gap:18px; justify-content:space-between;
-               align-items:flex-start; flex-wrap:wrap; }
-  .hint-box { text-align:right; max-width:430px; margin:2px 0 0;
-              line-height:1.6; }
-  tbody tr:hover { background:#1a1e27; }
-  td { font-variant-numeric:tabular-nums; }
-  .card { box-shadow:0 1px 3px rgba(0,0,0,.28); }
+:root {
+  --bg:#090c12; --panel:#10151f; --panel2:#151b28; --line:rgba(148,163,184,.10);
+  --line2:rgba(148,163,184,.18); --ink:#dde4f0; --ink2:#97a3b9; --ink3:#67718a;
+  --acc:#7aa2ff; --acc2:#43d6bd; --ok:#5cd68a; --warn:#eac76d; --bad:#ff6f87;
+  --mono:ui-monospace,'Cascadia Mono','JetBrains Mono',Consolas,'Courier New',monospace;
+}
+* { box-sizing:border-box; }
+html { color-scheme:dark; }
+body {
+  margin:0; padding:26px 22px 48px; color:var(--ink);
+  font:14.5px/1.55 'Segoe UI','Inter',system-ui,-apple-system,sans-serif;
+  background:
+    radial-gradient(1100px 520px at 12% -12%, rgba(96,124,255,.11), transparent 60%),
+    radial-gradient(900px 520px at 106% 6%, rgba(67,214,189,.07), transparent 55%),
+    var(--bg);
+  background-attachment:fixed;
+}
+::selection { background:rgba(122,162,255,.30); }
+*::-webkit-scrollbar { width:9px; height:9px; }
+*::-webkit-scrollbar-thumb { background:#27303f; border-radius:9px;
+  border:2px solid transparent; background-clip:content-box; }
+*::-webkit-scrollbar-thumb:hover { background:#334056; background-clip:content-box; }
+*::-webkit-scrollbar-track { background:transparent; }
+.wrap { max-width:1380px; margin:0 auto; }
+.mono { font-family:var(--mono); font-size:.92em; color:var(--ink2); }
+.note { color:var(--ink3); font-size:11.5px; margin-top:10px; }
+.err, .note.err { color:var(--bad); }
+a { color:var(--acc); }
+
+/* ---------- header ---------- */
+.head-flex { display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; }
+.head-l { flex:1 1 560px; min-width:0; }
+.brand { display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
+.logo { width:31px; height:31px; border-radius:9px; flex:none;
+  background:linear-gradient(135deg,#6c8cff,#37c8b4); display:grid; place-items:center;
+  font:800 13px/1 var(--mono); color:#0a0f1c; letter-spacing:-.5px;
+  box-shadow:0 5px 16px rgba(96,124,255,.35), inset 0 1px 0 rgba(255,255,255,.35); }
+h1 { font-size:16.5px; font-weight:650; letter-spacing:-.01em; margin:0;
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+h1 .sub { color:var(--ink3); font-weight:450; font-size:12.5px; letter-spacing:0; }
+.row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+
+/* ---------- pills ---------- */
+.pill { display:inline-flex; align-items:center; gap:6px; padding:3px 10px;
+  border-radius:99px; border:1px solid var(--line2); color:var(--ink2);
+  background:rgba(148,163,184,.07); font-size:11.5px; font-weight:550;
+  line-height:1.5; white-space:nowrap; }
+.pill::before { content:""; width:6px; height:6px; border-radius:50%;
+  background:currentColor; opacity:.85; flex:none; }
+.pill.ok   { color:var(--ok);   border-color:rgba(92,214,138,.32);  background:rgba(92,214,138,.07); }
+.pill.warn { color:var(--warn); border-color:rgba(234,199,109,.32); background:rgba(234,199,109,.07); }
+.pill.bad  { color:var(--bad);  border-color:rgba(255,111,135,.32); background:rgba(255,111,135,.07); }
+.pill.live { color:#ff93a6; border-color:rgba(255,111,135,.5);
+  background:rgba(255,111,135,.10); animation:armed 1.6s ease-in-out infinite; }
+@keyframes armed { 50% { box-shadow:0 0 0 4px rgba(255,111,135,.10); } }
+
+/* ---------- controls ---------- */
+.btnset { display:flex; gap:8px; align-items:center; padding:7px 9px;
+  background:rgba(21,27,40,.7); border:1px solid var(--line); border-radius:13px;
+  backdrop-filter:blur(4px); }
+.btnset .lbl { font-size:9.5px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.12em; color:var(--ink3); padding:0 2px 0 3px; }
+.btnset .div { width:1px; align-self:stretch; background:var(--line2); margin:2px 2px; }
+button, input[type=text] { font:inherit; }
+button { appearance:none; cursor:pointer; border-radius:9px; padding:7px 13px;
+  font-size:12.5px; font-weight:600; color:var(--ink);
+  border:1px solid var(--line2); background:var(--panel2);
+  transition:transform .12s ease, border-color .12s, background .12s, box-shadow .12s; }
+button:hover:not(:disabled) { border-color:rgba(122,162,255,.55);
+  background:#1a2233; transform:translateY(-1px);
+  box-shadow:0 6px 16px rgba(0,0,0,.30); }
+button:active:not(:disabled) { transform:translateY(0); }
+button:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
+button:disabled { opacity:.38; cursor:default; }
+button.danger { color:#ff93a6; border-color:rgba(255,111,135,.35);
+  background:rgba(255,111,135,.08); }
+button.danger:hover:not(:disabled) { border-color:rgba(255,111,135,.65);
+  background:rgba(255,111,135,.14); }
+button.ghost { background:transparent; border-color:var(--line); color:var(--ink2); }
+button.ghost:hover:not(:disabled) { color:var(--ink); }
+input[type=text] { background:#0b0f17; border:1px solid var(--line2);
+  border-radius:9px; color:var(--ink); padding:7px 10px; width:128px;
+  font-family:var(--mono); font-size:12.5px; }
+input[type=text]:focus { outline:none; border-color:rgba(122,162,255,.6);
+  box-shadow:0 0 0 3px rgba(122,162,255,.14); }
+input[type=text]::placeholder { color:var(--ink3); }
+.hint-box { flex:none; max-width:420px; text-align:right; font-size:11px;
+  line-height:1.7; color:var(--ink3); margin-top:2px;
+  background:linear-gradient(180deg, rgba(122,162,255,.06), rgba(148,163,184,.035));
+  border:1px solid var(--line2); border-radius:12px; padding:11px 14px;
+  backdrop-filter:blur(4px); box-shadow:inset 0 1px 0 rgba(255,255,255,.04); }
+.hint-box b { color:var(--ink2); font-weight:650; }
+.hint-box .ok { color:var(--ok); } .hint-box .warn { color:var(--warn); }
+
+/* ---------- layout ---------- */
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
+.span2 { grid-column:1 / -1; }
+@media (max-width:1080px) { .grid { grid-template-columns:1fr; } }
+.card { background:linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--line); border-radius:15px; padding:17px 19px;
+  box-shadow:0 10px 28px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.03); }
+.card h2 { margin:0 0 13px; font-size:10.5px; font-weight:700;
+  text-transform:uppercase; letter-spacing:.13em; color:var(--ink2);
+  display:flex; align-items:center; gap:9px; }
+.card h2::before { content:""; width:3px; height:13px; border-radius:2px; flex:none;
+  background:linear-gradient(180deg,var(--acc),var(--acc2)); }
+
+/* ---------- stats ---------- */
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(126px,1fr)); gap:10px; }
+.stats > div { background:rgba(9,12,18,.45); border:1px solid var(--line);
+  border-radius:12px; padding:13px 16px 12px; }
+.stats b { display:block; font-size:21px; font-weight:650; letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums; line-height:1.15; }
+.stats span { font-size:9.5px; font-weight:650; text-transform:uppercase;
+  letter-spacing:.09em; color:var(--ink3); }
+.stats > div:nth-child(1) b { color:var(--acc); }
+.stats > div:nth-child(2) b { color:var(--ok); }
+.stats > div:nth-child(4) b { color:var(--bad); }
+
+/* ---------- tables ---------- */
+.tablewrap { overflow:auto; max-height:400px; margin:0 -6px; }
+table { width:100%; border-collapse:separate; border-spacing:0; font-size:12.8px; }
+thead th { position:sticky; top:0; z-index:1; text-align:left; padding:8px 11px;
+  background:#131926; border-bottom:1px solid var(--line2);
+  font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.09em;
+  color:var(--ink3); white-space:nowrap; }
+thead th.num { text-align:right; }
+tbody td { padding:8.5px 11px; border-bottom:1px solid rgba(148,163,184,.055);
+  white-space:nowrap; }
+tbody td.name { white-space:normal; max-width:330px; }
+tbody tr:hover td { background:rgba(122,162,255,.055); }
+tbody tr:last-child td { border-bottom:none; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
+th.num, td.num { min-width:46px; }
+td.dim { color:var(--ink3); } td.ok { color:var(--ok); } td.warn { color:var(--warn); }
+td .pill { font-size:10.5px; padding:2px 9px; }
+.empty { text-align:center; color:var(--ink3); font-style:italic; padding:20px !important; }
+.next-cell { color:var(--ok); font-weight:700; }
+
+/* ---------- content editor ---------- */
+.editorbar { display:flex; gap:10px; align-items:center; margin-top:11px;
+  flex-wrap:wrap; }
+.editorbar .note { margin:0; }
+.ptext { width:100%; min-height:230px; background:#0b0f17;
+  border:1px solid var(--line2); border-radius:12px; color:var(--ink);
+  font:13px/1.65 var(--mono); padding:13px 15px; resize:vertical; }
+.ptext:focus { outline:none; border-color:rgba(122,162,255,.6);
+  box-shadow:0 0 0 3px rgba(122,162,255,.13); }
+.cars { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+  gap:12px; }
+.car { background:rgba(9,12,18,.45); border:1px solid var(--line);
+  border-radius:12px; padding:12px 13px; }
+.car h3 { margin:0 0 10px; font:650 12px/1.4 var(--mono); color:var(--ink2); }
+.thumbs { display:flex; flex-wrap:wrap; gap:10px; min-height:72px;
+  align-items:flex-start; }
+.thumb { position:relative; width:96px; }
+.thumb img { width:96px; height:70px; object-fit:cover; display:block;
+  border-radius:9px; border:1px solid var(--line); background:#0b0f17; }
+.thumb button { position:absolute; top:-7px; right:-7px; width:22px;
+  height:22px; padding:0; border-radius:50%; display:none; font-size:12px;
+  line-height:1; }
+.thumb:hover button { display:inline-block; }
+.carfoot { display:flex; gap:8px; align-items:center; margin-top:11px;
+  flex-wrap:wrap; }
+input[type=file] { font-size:11.5px; color:var(--ink3); max-width:180px; }
+
+/* ---------- log pane ---------- */
+pre#log { background:#070a10; border:1px solid var(--line); border-radius:12px;
+  padding:13px 15px; margin:0; height:320px; overflow:auto;
+  font:12.3px/1.65 var(--mono); color:#9fb2ca; white-space:pre-wrap;
+  word-break:break-word; }
+label[for=autoscroll] { font-size:12px; color:var(--ink2); }
 </style>
 </head>
 <body>
-<header>
-<div class="head-flex">
-<div>
-  <h1>autoposter · local control <span class="pill" id="ident">…</span>
-      <span class="pill" id="mode">…</span></h1>
-  <div class="row" id="controls">
-    <button id="b-dry-groups">Dry run · groups</button>
-    <button id="b-dry-cross">Dry run · crosspost</button>
-    <button id="b-refresh-groups">Refresh groups (read-only)</button>
-    <button id="b-refresh-listings">Refresh listings</button>
-    <input type="text" id="confirm" placeholder="type PUBLICAR" autocomplete="off"
-           spellcheck="false" aria-label="live confirmation phrase">
-    <button class="danger" id="b-live-groups">LIVE · groups</button>
-    <button class="danger" id="b-live-cross">LIVE · crosspost</button>
-    <button class="danger" id="b-kill">Kill run</button>
-    <span class="pill" id="runstate">idle</span>
+<div class="wrap">
+
+<header class="head-flex">
+  <div class="head-l">
+    <div class="brand">
+      <div class="logo">ap</div>
+      <h1>autoposter <span class="sub">local control</span></h1>
+      <span class="pill" id="ident"></span>
+      <span class="pill" id="mode"></span>
+    </div>
+    <div class="row" id="controls">
+      <span class="btnset"><span class="lbl">test</span>
+        <button id="b-dry-groups">Dry run · groups</button>
+        <button id="b-dry-cross">Dry run · crosspost</button>
+      </span>
+      <span class="btnset"><span class="lbl">data</span>
+        <button class="ghost" id="b-refresh-groups">Refresh groups</button>
+        <button class="ghost" id="b-refresh-listings">Refresh listings</button>
+      </span>
+      <span class="btnset"><span class="lbl">live</span>
+        <input type="text" id="confirm" placeholder="type PUBLICAR"
+               autocomplete="off" spellcheck="false">
+        <button class="danger" id="b-live-groups">LIVE · groups</button>
+        <button class="danger" id="b-live-cross">LIVE · crosspost</button>
+      </span>
+      <span class="btnset">
+        <button class="danger" id="b-kill" disabled>Kill run</button>
+        <span class="div"></span>
+        <span class="pill" id="runstate">idle</span>
+      </span>
+    </div>
+    <div class="note err" id="action"></div>
   </div>
-  <div class="note err" id="action"></div>
-</div>
-  <div class="note hint-box" id="hint">
-    live buttons: type <b class="mono">PUBLICAR</b> in the box AND set
-    <span class="mono">AP_DRY_RUN=false</span> in .env<br>
+  <div class="hint-box" id="hint">
+    live buttons: type <b>PUBLICAR</b> in the box <b>AND</b> set
+    <b>AP_DRY_RUN=false</b> in .env<br>
     <b>dry</b> = test run: composer staged/screenshot, nothing published ·
     <b>rc</b> = run exit code (0 ok · 1 nothing posted · 2 login · 3 identity)<br>
-    <b>live?</b> = after a publish: <span class="ok">✓ visible</span> in the
-    feed · <span class="warn">⏳ pending</span> admin review · ❔ couldn't tell
+    <b>live?</b> = after a publish: <span class="ok">✓ visible</span> in the feed ·
+    <span class="warn">⏳ pending</span> admin review · ❔ couldn't tell
   </div>
-</div>
 </header>
 
-<div class="wrap">
-  <div class="card">
+<div class="grid">
+
+  <div class="card span2">
     <h2>Status</h2>
-    <div class="stat" id="stats"></div>
+    <div class="stats" id="stats"></div>
     <div class="note" id="statusnote"></div>
   </div>
 
-  <div class="cols">
-    <div class="card">
-      <h2>Joined groups &amp; rotation</h2>
-      <div class="scroll"><table id="groups">
-        <thead><tr><th>next</th><th>group id</th><th>name</th>
-          <th>last attempt</th><th>status</th><th>live?</th>
-          <th>pub.</th><th>att.</th></tr></thead>
-        <tbody></tbody></table></div>
-      <div class="note" id="groupsnote"></div>
+  <div class="card span2">
+    <h2>Post text · data/post.txt</h2>
+    <textarea class="ptext" id="ptext" spellcheck="false"
+      placeholder="no post.txt yet — write it here; saving creates it"></textarea>
+    <div class="editorbar">
+      <button id="b-save-post">Save post text</button>
+      <button class="ghost" id="b-reload-post">Reload from disk</button>
+      <span class="note" id="ptnote"></span>
     </div>
-    <div class="card">
-      <h2>Marketplace listings &amp; crosspost coverage</h2>
-      <div class="scroll"><table id="listings">
-        <thead><tr><th>listing id</th><th>title</th><th>price</th>
-          <th>approved</th><th>rejected</th><th>batches</th>
-          <th>groups</th></tr></thead>
-        <tbody></tbody></table></div>
-      <div class="note" id="listingsnote"></div>
+    <div class="note">Copied VERBATIM into every group post (line breaks and
+      emoji included) — this editor is the only place to change it; no need to
+      touch the file by hand.</div>
+  </div>
+
+  <div class="card span2">
+    <h2>Car photos · data/car_photos</h2>
+    <div class="cars" id="cars"></div>
+    <div class="editorbar">
+      <input type="text" id="newcar" placeholder="05_new_folder"
+             autocomplete="off" spellcheck="false">
+      <button class="ghost" id="b-addcar">Add car folder</button>
+      <span class="note">Folder order = car order in the post · uploads need
+        the folder to exist first</span>
     </div>
   </div>
 
-  <div class="cols">
-    <div class="card">
-      <h2>Recent runs (ledger)</h2>
-      <div class="scroll"><table id="runs">
-        <thead><tr><th>run id</th><th>when</th><th>kind</th><th>dry</th>
-          <th>pub</th><th>staged</th><th>fail</th><th>skip</th>
-          <th>xpost</th></tr></thead>
-        <tbody></tbody></table></div>
-      <div class="note" id="runsnote"></div>
-    </div>
-    <div class="card">
-      <h2>Run logs on disk</h2>
-      <div class="scroll"><table id="logs">
-        <thead><tr><th>file</th><th>modified</th><th>bytes</th></tr></thead>
-        <tbody></tbody></table></div>
-      <div class="note" id="logsnote"></div>
-    </div>
+  <div class="card span2">
+    <h2>Joined groups &amp; rotation</h2>
+    <div class="tablewrap"><table id="groups">
+      <thead><tr><th>next</th><th>group id</th><th>name</th><th>last attempt</th>
+        <th>status</th><th>live?</th><th class="num">pub.</th><th class="num">att.</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="note" id="groupsnote"></div>
   </div>
 
   <div class="card">
-    <h2>Live output <span class="pill" id="logcursor"></span></h2>
-    <div class="row" style="margin-bottom:8px">
-      <button id="b-clear">Clear view</button>
-      <label class="pill"><input type="checkbox" id="autoscroll" checked>
-        autoscroll</label>
+    <h2>Marketplace listings</h2>
+    <div class="tablewrap"><table id="listings">
+      <thead><tr><th>id</th><th>title</th><th>price</th><th>approved</th>
+        <th>rejected</th><th class="num">batches</th><th class="num">groups</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="note" id="listingsnote"></div>
+  </div>
+
+  <div class="card">
+    <h2>Run logs on disk</h2>
+    <div class="tablewrap"><table id="logs">
+      <thead><tr><th>file</th><th>modified</th><th class="num">bytes</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+
+  <div class="card span2">
+    <h2>Recent runs (ledger)</h2>
+    <div class="tablewrap"><table id="runs">
+      <thead><tr><th>run id</th><th>last event</th><th>kinds</th><th>dry</th>
+        <th class="num">pub</th><th class="num">staged</th><th class="num">failed</th>
+        <th class="num">skipped</th><th class="num">crossposts</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+
+  <div class="card span2">
+    <h2>Live output</h2>
+    <div class="row" style="margin:0 0 10px">
+      <label><input type="checkbox" id="autoscroll" checked> autoscroll</label>
+      <button class="ghost" id="b-clear">Clear</button>
+      <span class="note mono" id="logcursor" style="margin:0 auto 0 0"></span>
     </div>
     <pre id="log"></pre>
     <div class="note">Streamed from the running CLI subprocess (stdout+stderr
       merged). Dry runs stage the composer and close it without publishing.</div>
   </div>
+
+</div>
 </div>
 
 <script>
@@ -265,9 +411,9 @@ function renderState(st) {
   // groups table
   fillTable("groups", g.rows || [], (row, tr) => {
     const nx = td(tr, row.next ? "▶" : "");
-    if (row.next) nx.className = "ok";
+    if (row.next) nx.className = "next-cell";
     td(tr, row.id, "mono");
-    td(tr, row.name);
+    td(tr, row.name, "name");
     td(tr, fmtTs(row.last_ts), "mono");
     const cell = td(tr, row.last_status || "never");
     cell.className = "pill " + statusClass(row.last_status);
@@ -442,6 +588,148 @@ poll();
 pollLog();
 setInterval(poll, 5000);
 setInterval(pollLog, 1000);
+
+// ---- content editor: post.txt + car_photos (POST /api/content*) ----
+let postBase = "";
+let postDirty = false;
+
+function setNote(id, msg, bad) {
+  const n = $(id);
+  text(n, msg);
+  n.className = "note" + (bad ? " err" : "");
+}
+
+async function postJson(url, obj) {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(obj),
+  });
+  return resp.json();
+}
+
+function blobToB64(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(",")[1]);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(file);
+  });
+}
+
+function renderCars(cars) {
+  const wrap = $("cars");
+  wrap.replaceChildren();
+  for (const car of cars) {
+    const box = document.createElement("div");
+    box.className = "car";
+    const h = document.createElement("h3");
+    text(h, car.name + " · " + car.photos.length + " photo(s)");
+    box.appendChild(h);
+
+    const thumbs = document.createElement("div");
+    thumbs.className = "thumbs";
+    for (const ph of car.photos) {
+      const fig = document.createElement("div");
+      fig.className = "thumb";
+      const im = document.createElement("img");
+      im.src = "/api/content/image?car=" + encodeURIComponent(car.name)
+             + "&name=" + encodeURIComponent(ph.name);
+      im.alt = ph.name;
+      im.title = ph.name + " (" + ph.bytes + " bytes)";
+      const del = document.createElement("button");
+      del.className = "danger";
+      text(del, "×");
+      del.title = "delete " + ph.name;
+      del.onclick = async () => {
+        await postJson("/api/content/photo/delete",
+                       { car: car.name, name: ph.name });
+        refreshContent(false);
+      };
+      fig.appendChild(im);
+      fig.appendChild(del);
+      thumbs.appendChild(fig);
+    }
+    if (!car.photos.length) {
+      const em = document.createElement("div");
+      em.className = "note";
+      text(em, "no photos in this folder yet");
+      thumbs.appendChild(em);
+    }
+    box.appendChild(thumbs);
+
+    const foot = document.createElement("div");
+    foot.className = "carfoot";
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.multiple = true;
+    picker.accept = "image/*";
+    const up = document.createElement("button");
+    text(up, "Upload here");
+    up.onclick = async () => {
+      const files = picker.files;
+      if (!files || !files.length) return;
+      up.disabled = true;
+      for (const f of files) {
+        const b64 = await blobToB64(f);
+        const out = await postJson("/api/content/photo",
+                                   { car: car.name, name: f.name,
+                                     data_b64: b64 });
+        if (out && out.error) setNote("ptnote", "upload failed: " + out.error, true);
+      }
+      up.disabled = false;
+      refreshContent(false);
+    };
+    const delcar = document.createElement("button");
+    delcar.className = "ghost";
+    text(delcar, "Delete folder");
+    delcar.onclick = async () => {
+      if (!window.confirm("Delete " + car.name + " and ALL its photos?")) return;
+      await postJson("/api/content/car/delete", { name: car.name });
+      refreshContent(false);
+    };
+    foot.appendChild(up);
+    foot.appendChild(picker);
+    foot.appendChild(delcar);
+    box.appendChild(foot);
+    wrap.appendChild(box);
+  }
+}
+
+async function refreshContent() {
+  const resp = await fetch("/api/content");
+  if (!resp.ok) return;
+  const st = await resp.json();
+  if (!postDirty) {
+    $("ptext").value = st.post_text || "";
+    postBase = st.post_text || "";
+  }
+  setNote("ptnote", st.post_exists
+    ? "saved · " + (st.post_mtime || "?") + " · " + st.data_dir
+    : "no post.txt yet — saving creates it");
+  renderCars(st.cars || []);
+}
+
+$("ptext").addEventListener("input", () => {
+  postDirty = $("ptext").value !== postBase;
+});
+$("b-save-post").onclick = async () => {
+  const out = await postJson("/api/content/post", { text: $("ptext").value });
+  if (out && out.error) { setNote("ptnote", out.error, true); return; }
+  postDirty = false;
+  setNote("ptnote", "saved · " + out.bytes + " bytes — next run posts this");
+  refreshContent();
+};
+$("b-reload-post").onclick = () => { postDirty = false; refreshContent(); };
+$("b-addcar").onclick = async () => {
+  const name = $("newcar").value.trim();
+  if (!name) return;
+  const out = await postJson("/api/content/car", { name });
+  if (out && out.error) { setNote("ptnote", out.error, true); return; }
+  $("newcar").value = "";
+  refreshContent();
+};
+refreshContent();
 </script>
 </body>
 </html>

@@ -12,13 +12,17 @@ code so the page can show the reason instead of a generic failure.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from . import content as content_mod
 from . import state as state_mod
+from .content import ContentError
 from .page import render_page
 from .runner import (
     RingBuffer,
@@ -88,6 +92,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return {}
         return data if isinstance(data, dict) else {}
 
+    def _send_bytes(self, blob: bytes, ctype: str,
+                    status: HTTPStatus = HTTPStatus.OK) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(blob)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(blob)
+
     # -- routes -----------------------------------------------------------
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -104,6 +117,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/health":
             self._send_json({"ok": True})
+            return
+        if path == "/api/content":
+            self._send_json(
+                content_mod.read_content(self.dashboard.paths.capture_root))
+            return
+        if path == "/api/content/image":
+            q = parse_qs(parsed.query)
+            try:
+                img = content_mod.resolve_image(
+                    self.dashboard.paths.capture_root,
+                    (q.get("car") or [""])[0], (q.get("name") or [""])[0])
+            except ContentError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_bytes(img.read_bytes(),
+                             content_mod.image_content_type(img))
             return
         self._send_json({"error": f"no such endpoint: {path}"},
                         HTTPStatus.NOT_FOUND)
@@ -123,8 +152,49 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/refresh-listings":
             self._spawn("listings-refresh", live=False)
             return
+        if path.startswith("/api/content"):
+            self._content(path, payload)
+            return
         self._send_json({"error": f"no such endpoint: {path}"},
                         HTTPStatus.NOT_FOUND)
+
+    def _content(self, path: str, payload: dict[str, Any]) -> None:
+        """Editing data/post.txt + data/car_photos — every handler is a thin
+        wrapper over poster.gui.content, where the path guards live. Any
+        ContentError is the user's bad input, never a server fault: 400 +
+        the reason."""
+        root = self.dashboard.paths.capture_root
+        try:
+            if path == "/api/content/post":
+                out = content_mod.save_post(root, payload.get("text", ""))
+            elif path == "/api/content/car":
+                out = content_mod.add_car(root, str(payload.get("name") or ""))
+            elif path == "/api/content/car/delete":
+                out = content_mod.delete_car(
+                    root, str(payload.get("name") or ""))
+            elif path == "/api/content/photo":
+                blob = base64.b64decode(str(payload.get("data_b64") or ""),
+                                        validate=True)
+                out = content_mod.save_photo(root,
+                                             str(payload.get("car") or ""),
+                                             str(payload.get("name") or ""),
+                                             blob)
+            elif path == "/api/content/photo/delete":
+                out = content_mod.delete_photo(
+                    root, str(payload.get("car") or ""),
+                    str(payload.get("name") or ""))
+            else:
+                self._send_json({"error": f"no such endpoint: {path}"},
+                                HTTPStatus.NOT_FOUND)
+                return
+        except ContentError as exc:
+            self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        except binascii.Error:
+            self._send_json({"error": "photo body is not valid base64"},
+                            HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json(out)
 
     def _run(self, payload: dict[str, Any]) -> None:
         reason = live_confirmation_error(payload)
