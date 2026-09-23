@@ -54,7 +54,10 @@ neither of which is a marketplace listing id.
 """
 from __future__ import annotations
 
+import argparse
+import asyncio
 import json
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -488,3 +491,65 @@ async def fetch_active_listings(page: Page, cfg: Config,
              f"for av={av or '<session actor>'}")
     save_listings_snapshot(cfg, listings, log)
     return listings
+
+
+# ---------------------------------------------------------------------------
+#: CLI: `poetry run python -m poster.listings` — READ-ONLY: adopt identity,
+#: fetch the ACTIVE listings, print a table, refresh the snapshot the
+#: dashboard's listings tile reads. Opens no dialogs, clicks nothing.
+#: rc: 0 ok (a confirmed 0 listings is ok) · 1 fetch failed · 2 not logged
+#: in · 3 identity switch failed.
+# ---------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    from playwright.async_api import async_playwright
+
+    from .config import load_config
+    from .fb import adopt_identity, launch, make_log
+
+    ap = argparse.ArgumentParser(
+        prog="python -m poster.listings",
+        description="Fetch ACTIVE marketplace listings of the posting "
+                    "identity and refresh the dashboard snapshot "
+                    "(read-only; nothing is published or clicked).")
+    ap.add_argument("--env-file", default=None,
+                    help="alternate .env path (or set AP_ENV_FILE)")
+    args = ap.parse_args(argv)
+
+    cfg = load_config(env_file=args.env_file)
+    log = make_log()
+
+    async def run() -> int:
+        async with async_playwright() as p:
+            ctx, page = await launch(cfg, p)
+            try:
+                state = await adopt_identity(ctx, page, cfg, log)
+                if state == "login":
+                    log("abort: not logged in")
+                    return 2
+                if state == "identity":
+                    log("abort: identity switch failed")
+                    return 3
+                try:
+                    listings = await fetch_active_listings(page, cfg, log=log)
+                except ListingsFetchError as e:
+                    log(f"abort: listings fetch failed: {e}")
+                    return 1
+                log(f"ACTIVE LISTINGS for {cfg.identity_label!r} "
+                    f"({cfg.post_as}):")
+                for lst in listings:
+                    log(f"  {lst.get('id') or '?':>20}  "
+                        f"{str(lst.get('title') or '')[:48]:<48} "
+                        f"{lst.get('price') or ''}")
+                if not listings:
+                    log("  (confirmed 0 active listings)")
+                return 0
+            finally:
+                await ctx.close()
+
+    return asyncio.run(run())
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -352,6 +352,28 @@ def test_manager_streams_child_output_into_the_buffer(tmp_path):
     assert mgr.status()["running"] is False and mgr.status()["rc"] == 0
 
 
+def test_child_clis_run_from_the_project_root_not_the_capture_root(tmp_path):
+    """2026-09-23 live bug: cwd was the capture root (.local-capture), so a
+    spawned `-m poster.x` died with ModuleNotFoundError. The repo is not
+    installed into site-packages; python -m only sees it when cwd IS the
+    project root."""
+    seen: dict = {}
+
+    def spy_popen(cmd, **kw):
+        seen.update(kw)
+        return FakeProc(["done\n"])
+
+    bufs = RingBuffer()
+    mgr = RunManager(tmp_path, bufs, python="PY", probe=lambda m: True,
+                     popen=spy_popen)
+    mgr.start("listings-refresh", live=False)
+    assert mgr.wait_idle(5) is True
+    import poster.gui.runner as runner_mod
+    repo = str(Path(runner_mod.__file__).resolve().parents[2])
+    assert seen["cwd"] == repo
+    assert tmp_path not in Path(seen["cwd"]).parents  # capture root is NOT it
+
+
 def test_manager_is_busy_until_the_run_finishes(tmp_path):
     bufs = RingBuffer()
     gate = threading.Event()
@@ -392,7 +414,8 @@ def test_manager_spawns_a_real_child_and_streams_its_output(tmp_path, monkeypatc
 
     A throwaway module stands in for poster.main so the test never opens a
     browser (the shared Firefox profile allows exactly one owner, and a test
-    must never be that owner). `cwd = root` is what makes `-m <name>` resolve.
+    must never be that owner). `project_dir` (NOT the capture root) is the
+    child's cwd — that separation is the 2026-09-23 bug fix.
     """
     (tmp_path / "gui_probe_cli.py").write_text(
         '"""throwaway CLI for the dashboard runner test"""\n'
@@ -407,7 +430,7 @@ def test_manager_spawns_a_real_child_and_streams_its_output(tmp_path, monkeypatc
 
     buffer = RingBuffer()
     mgr = RunManager(tmp_path, buffer, python=sys.executable,
-                     probe=lambda m: True)
+                     probe=lambda m: True, project_dir=tmp_path)
     started = mgr.start("probe", live=False)
     assert started["command"][-1] == "--dry-run"
     assert mgr.wait_idle(20) is True

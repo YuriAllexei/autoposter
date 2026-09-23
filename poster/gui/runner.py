@@ -85,9 +85,9 @@ def has_cli_main(dotted: str) -> bool:
 
     `find_spec` alone only proves the module imports; the repo's CLI modules
     are runnable because they end in an `if __name__ == "__main__"` guard
-    (poster.main, poster.notify). poster.listings today has NO guard, so a
-    spawn would silently do nothing — this check is what lets the dashboard
-    answer "no listings CLI on this checkout" instead of pretending.
+    (poster.main, poster.notify, poster.listings). A module
+    without the guard would spawn as a silent no-op — this check lets the
+    dashboard answer "no CLI on this checkout" instead of pretending.
     """
     try:
         spec = importlib.util.find_spec(dotted)
@@ -194,8 +194,14 @@ class RunManager:
     def __init__(self, root: Path, buffer: RingBuffer, *, python: str | None = None,
                  probe: Callable[[str], bool] = module_available,
                  cli_probe: Callable[[str], bool] = has_cli_main,
-                 popen: Callable[..., Any] = subprocess.Popen) -> None:
+                 popen: Callable[..., Any] = subprocess.Popen,
+                 project_dir: Path | None = None) -> None:
         self.root = Path(root)
+        #: child CLIs run here (NOT the capture root): `-m poster.<x>` only
+        #: resolves when cwd is the project root (the repo is not pip-
+        #: installed; python adds '' / cwd to sys.path for -m). Default:
+        #: poster/gui/runner.py -> parents[2] == repo root.
+        self.project_dir = Path(project_dir) if project_dir else Path(__file__).resolve().parents[2]
         self.buffer = buffer
         self.python = python or sys.executable
         self._probe = probe
@@ -258,7 +264,7 @@ class RunManager:
                                f"{spec['label']} ({'LIVE' if live else 'dry'})")
             self.buffer.append("[gui] $ " + " ".join(cmd))
             proc = self._popen(
-                cmd, cwd=str(self.root), stdout=subprocess.PIPE,
+                cmd, cwd=str(self.project_dir), stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                 bufsize=1, start_new_session=True,
             )
