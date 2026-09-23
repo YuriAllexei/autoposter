@@ -730,11 +730,11 @@ def test_duplicate_names_click_the_right_occurrence(tmp_path, monkeypatch):
 def test_final_sweep_aborts_when_a_check_flips_off(tmp_path, monkeypatch):
     """User-reported symptom (checks disappearing before submit): the sweep
     must raise with evidence, never let a lost toggle reach Publicar."""
-    fl, pg, rows = _dup_rows(monkeypatch, ["G1", "G2"], lost_index=1)
+    fl, pg, _rows = _dup_rows(monkeypatch, ["G1", "G2"], lost_index=1)
     cfg = _cfg(tmp_path)
     try:
-        fl_async = asyncio.run(fl.select_crosspost_groups(
+        asyncio.run(fl.select_crosspost_groups(
             pg, [{"name": "G1"}, {"name": "G2"}], cfg, lambda *_a: None))
-        raise AssertionError("must raise FlowError")   # noqa: F841
+        raise AssertionError("must raise FlowError")
     except fl.FlowError as e:
         assert "LOST its check" in str(e)
