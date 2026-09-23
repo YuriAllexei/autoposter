@@ -665,3 +665,76 @@ def test_more_button_absent_raises_with_evidence(tmp_path, monkeypatch):
         raise AssertionError("must raise FlowError")
     except fl.FlowError as e:
         assert "0 folded matches" in str(e) and "evidence.png" in str(e)
+
+
+# ---- duplicate names: occurrence-rank clicks + final sweep ----
+
+def _dup_rows(monkeypatch, names, lost_index=None):
+    import poster.flows as fl
+
+    class Row:
+        def __init__(self, name, idx):
+            self.name, self.idx = name, idx
+            self.checked = False
+            self.reads = 0
+
+        async def inner_text(self):
+            return self.name + "\n10 miembros\n · Público"
+
+        async def click(self):
+            self.checked = not self.checked   # real TOGGLE semantics
+
+        async def get_attribute(self, a):
+            assert a == "aria-checked"
+            self.reads += 1
+            state = self.checked
+            if (lost_index == self.idx and self.reads >= 2
+                    and not self.checked):
+                state = False
+            elif lost_index == self.idx and self.reads >= 2:
+                state = False            # the sweep sees it flip off
+            return "true" if state else "false"
+
+    class Rows:
+        def __init__(self): self.items = [Row(x, i) for i, x in enumerate(names)]
+        async def count(self): return len(self.items)
+        def nth(self, i): return self.items[i]
+
+    class Pg:
+        def locator(self, sel):
+            assert sel == fl.CROSSPOST_ROW_SEL
+            return self._rows
+    pg = Pg()
+    pg._rows = Rows()
+    async def fast(*_a, **_k):
+        return None
+    monkeypatch.setattr(fl.asyncio, "sleep", fast)
+    return fl, pg, pg._rows
+
+
+def test_duplicate_names_click_the_right_occurrence(tmp_path, monkeypatch):
+    """The 2207Z batch-2 bug: two joined groups share one name; each batch
+    must click ITS occurrence, not the first row that matches."""
+    fl, pg, rows = _dup_rows(monkeypatch,
+                             ["VENTA DE CARROS CHIHUAHUA", "otro",
+                              "venta  de Carros chihuahua"])
+    cfg = _cfg(tmp_path)
+    n = asyncio.run(fl.select_crosspost_groups(
+        pg, [{"name": "venta de carros chihuahua", "rank": 1}], cfg,
+        lambda *_a: None))
+    assert n == 1
+    assert rows.items[2].checked is True      # SECOND occurrence, not the first
+    assert rows.items[0].checked is False
+
+
+def test_final_sweep_aborts_when_a_check_flips_off(tmp_path, monkeypatch):
+    """User-reported symptom (checks disappearing before submit): the sweep
+    must raise with evidence, never let a lost toggle reach Publicar."""
+    fl, pg, rows = _dup_rows(monkeypatch, ["G1", "G2"], lost_index=1)
+    cfg = _cfg(tmp_path)
+    try:
+        fl_async = asyncio.run(fl.select_crosspost_groups(
+            pg, [{"name": "G1"}, {"name": "G2"}], cfg, lambda *_a: None))
+        raise AssertionError("must raise FlowError")   # noqa: F841
+    except fl.FlowError as e:
+        assert "LOST its check" in str(e)

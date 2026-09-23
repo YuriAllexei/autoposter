@@ -498,6 +498,16 @@ async def open_crosspost_dialog(page: Page, title: str, cfg: Config,
                                    "crosspost_dialog_parse")
         raise FlowError(f"dialog payload unreadable ({type(e).__name__}: {e}). "
                         f"Evidence: {shot}") from e
+    # [live lesson 2026-09-23, batch-2 mis-tick] the dialog list contains
+    # DUPLICATE GROUP NAMES (two joined 'venta de carros chihuahua'!).
+    # Payload order == DOM row order (the skeleton wait above already
+    # relies on that 1:1), so tag each group with which occurrence of its
+    # NAME it is — select clicks the same occurrence among the rows.
+    ranks: dict[str, int] = {}
+    for g in groups:
+        k = _norm(g["name"])
+        g["rank"] = ranks.get(k, 0)
+        ranks[k] = g["rank"] + 1
     if not groups:
         shot = await dump_evidence(page, cfg.screenshot_dir, "crosspost_no_targets")
         raise FlowError(f"dialog offered 0 groups for {title!r}. "
@@ -530,23 +540,29 @@ async def select_crosspost_groups(page: Page, groups: list,
     """Check exactly these groups in the OPEN dialog. [proven] checkboxes
     exist ONLY in 'En tus grupos' (suggested rows are 'Unirte al grupo'
     buttons — NEVER clickable by design: the selector cannot reach them);
-    rows carry no id — match folded first-line text, read back aria-checked
-    after every trusted click (1:1 discipline)."""
+    rows carry no id — match folded first-line text BY OCCURRENCE RANK
+    (duplicate names exist in real dialogs!), read back aria-checked after
+    every trusted click, and re-read ALL of one last time before the
+    dialog may be submitted (1:1 discipline)."""
     rows = page.locator(CROSSPOST_ROW_SEL)
     n = await rows.count()
-    first_line: dict[str, int] = {}
+    # every DOM row index per folded name, in order (duplicates KEPT —
+    # open_crosspost_dialog tagged the payload with occurrence ranks)
+    by_name: dict[str, list[int]] = {}
     for i in range(n):
         key = _norm((await rows.nth(i).inner_text()).split("\n", 1)[0])
-        first_line.setdefault(key, i)
+        by_name.setdefault(key, []).append(i)
     picked: list[int] = []
     for g in groups:
-        i = first_line.get(_norm(g["name"]))
-        if i is None or i in picked:
+        idxs = by_name.get(_norm(g["name"]), [])
+        rank = int(g.get("rank") or 0)
+        if rank >= len(idxs):
             shot = await dump_evidence(page, cfg.screenshot_dir,
                                        "crosspost_row_missing")
-            raise FlowError(f"dialog row for {g['name']!r} not found/unique "
-                            f"({n} rows). Evidence: {shot}")
-        picked.append(i)
+            raise FlowError(f"dialog row for {g['name']!r} occurrence "
+                            f"#{rank + 1} missing ({len(idxs)} same-name rows "
+                            f"of {n}). Evidence: {shot}")
+        picked.append(idxs[rank])
     for pos, (i, g) in enumerate(zip(picked, groups, strict=True), 1):
         if pos > 1:   # first click is immediate; humans pause BETWEEN ticks
             await asyncio.sleep(random.uniform(*CROSSPOST_ROW_CLICK_DELAY))
@@ -557,6 +573,15 @@ async def select_crosspost_groups(page: Page, groups: list,
             raise FlowError(f"row {g['name']!r} click left aria-checked false. "
                             f"Evidence: {shot}")
         log(f"crosspost: checked '{str(g['name'])[:44]}' ({pos}/{len(picked)})")
+    # FINAL SWEEP (live 2207Z report: user watched checks disappear before
+    # submit): a toggle flipping AFTER its own verify must never reach
+    # Publicar unnoticed — re-read every row, abort with evidence otherwise.
+    for i, g in zip(picked, groups, strict=True):
+        if await rows.nth(i).get_attribute("aria-checked") != "true":
+            shot = await dump_evidence(page, cfg.screenshot_dir,
+                                       "crosspost_check_lost")
+            raise FlowError(f"row {g['name']!r} LOST its check before submit. "
+                            f"Evidence: {shot}")
     return len(picked)
 
 

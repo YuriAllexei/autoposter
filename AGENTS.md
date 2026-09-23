@@ -184,6 +184,13 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
   `[role=dialog] [role=checkbox]`, text = '<NAME>\n<nn,n mil miembros>\n ·
   Público' → match folded FIRST LINE. The dialog is modal (aria-modal):
   close = no aria-modal [role=dialog] remains (`_DIALOG_GONE_JS`).
+- DUPLICATE GROUP NAMES (live 2026-09-23, batch-2 mis-tick): the dialog's 25
+  rows can contain TWO joined groups with the same name ('venta de carros
+  chihuahua' ×2) — done-sets are keyed by ID but rows show names. Fix:
+  open tags each payload group with its name-occurrence `rank` (payload
+  order == DOM row order), select clicks occurrence `rank` of the folded
+  name and runs a FINAL aria-checked sweep before submit. Never map
+  name→first-row again.
 - RACE LESSONS (live 2026-09-23, cost two failed smokes): FB hydrates
   asynchronously everywhere — dialog rows appear AFTER their graphql
   response (skeleton first: wait for row count ≥ payload count), and the
