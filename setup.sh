@@ -58,11 +58,11 @@ else:
     s = s.rstrip("\n") + "\n\n" + block + "\n"
 rc_path.write_text(s)
 PYEOF
-  # prove the helper actually defines all three commands in BOTH shells
+  # prove the helper actually defines every ap-* command in BOTH shells
   for sh in bash zsh; do
     if command -v "$sh" >/dev/null; then
-      "$sh" -c ". '${REPO}/shell/autoposter.sh' && type ap-record ap-timeline ap-groups >/dev/null" \
-        && echo "    ${sh}: ap-record/ap-timeline/ap-groups OK" \
+      "$sh" -c ". '${REPO}/shell/autoposter.sh' && type ap-record ap-timeline ap-groups ap-gui >/dev/null" \
+        && echo "    ${sh}: ap-record/ap-timeline/ap-groups/ap-gui OK" \
         || { echo "    ${sh}: FAILED to load shell/autoposter.sh" >&2; exit 1; }
     fi
   done
@@ -90,4 +90,7 @@ Done. Next steps on a fresh machine:
   4. ap-groups            # live joined-group list of the configured identity
                           # (+ rotation state from the ledger)
   5. ap-timeline --full   # time-ordered review of the newest dump
+  6. ap-gui               # control dashboard in the browser (dry-run unless
+                          # .env says AP_DRY_RUN=false; live runs also need
+                          # typing the PUBLICAR phrase)
 EOF

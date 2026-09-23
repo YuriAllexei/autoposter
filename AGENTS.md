@@ -83,7 +83,7 @@ poetry run python -m poster.notify --stats  # all-time published per group
 ```
 
 Shell helpers (`shell/autoposter.sh`, sourced by setup.sh; bash+zsh):
-`ap-record [URL]`, `ap-timeline [dir] [--full]`, `ap-groups`.
+`ap-record [URL]`, `ap-timeline [dir] [--full]`, `ap-groups`, `ap-gui`.
 Recorder console: `s`+Enter screenshot+note, `q`+Enter quit & flush.
 Submodule gotchas: see `scraping_recorder/AGENTS.md`.
 

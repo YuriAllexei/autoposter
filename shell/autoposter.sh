@@ -1,5 +1,5 @@
 # autoposter shell integration — sourced from ~/.bashrc or ~/.zshrc.
-# Defines: ap-record, ap-timeline, ap-groups.  bash + zsh compatible.
+# Defines: ap-record, ap-timeline, ap-groups, ap-gui.  bash + zsh compatible.
 # Repo path resolves from THIS file's location, so moving/cloning the repo
 # needs no rc edits beyond the single source line setup.sh installs.
 _AP_SELF="${BASH_SOURCE:-}"
@@ -29,4 +29,11 @@ ap-timeline() {
 # (opens the browser; read-only) + rotation state from the ledger
 ap-groups() {
   cd "$_AP_REPO" && poetry run python -m poster.main --list-groups
+}
+
+# ap-gui [flags] — localhost dashboard (http://127.0.0.1:8765) + run buttons
+# for both pipelines. --open is on by default (WSL-aware: opens the Windows
+# browser); pass extra flags through, e.g. ap-gui --port 9000
+ap-gui() {
+  cd "$_AP_REPO" && poetry run python -m poster.gui --open "$@"
 }
