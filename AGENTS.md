@@ -48,8 +48,9 @@ poetry run python -m poster.share --dry-run # full N x M matrix, staged only
 poetry run python -m poster.share --dry-run --listing TAHOE --group 198780741983035
 # 3 listings x 40 groups = 120 shares; uncapped by default (--max 0;
 # AP_MAX_POSTS_PER_RUN stays TEXT-pipeline only). Sleep between shares:
-# AP_SHARE_GAP_MIN/MAX_SECONDS in .env (default 2-3s, cap 20s, exactly N-1
-# gaps, never after the last). Dashboard: 'Dry run · share' button +
+# AP_SHARE_GAP_MIN/MAX_SECONDS in .env (default 10-15s, cap 20s, exactly N-1
+# gaps, never after the last). Dashboard: 'Individual Listing Sequential
+# Group Posting' button (dry-only) +
 # SHARE . LEDGER AUDIT card. rc: 0 >=1 staged/published · 1 nothing done or
 # joins-fetch broke · 2/3 identity · 4 --live refused without AP_DRY_RUN=false.
 # Ledger kind:share rows = audit/Discord ONLY (no cross-run memory).
@@ -134,7 +135,12 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
    (`flows.CROSSPOST_ROW_CLICK_DELAY`, constant on purpose). NO sleep between photo
    batches (settling = `_wait_upload_settled` condition-wait). Post text is
    PASTED (`execCommand('insertText')`, Enter per line) behind the 1:1
-   read-back gate; char-by-char typing survives only as one-shot fallback.
+   read-back gate; text is NEVER typed char-by-char (user rule 2026-09-25:
+   typing is a bot fingerprint). A failed read-back retries by CLEARING via
+   the paste API (`_clear_editor`: selectAll+delete, verified empty) and
+   re-pasting once — keyboard clear chords (Ctrl+A+Del) are banned: when
+   Lexical ignores them the re-paste APPENDS (double-written text, live
+   2026-09-25) and the chords themselves look machine-made.
 6. DEV SAFETY: never post or comment unless the selector is proven against a
    recording/dry-run. `AP_DRY_RUN=true` is default and fail-safe.
 7. MONITORING: exactly ONE Discord summary per run, sent only after it ends

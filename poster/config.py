@@ -130,12 +130,13 @@ class Config:
     crosspost_action_max: float = 3.0
 
     # ---- individual SHARE pipeline (poster/share.py) ----
-    # Explicit user rule (2026-09-24): the wait BETWEEN one share and the
-    # next — group to group AND listing to listing — is its own category,
-    # uniform 2-3s (the 10-15s group-change category is NOT used here).
-    # Capped at MAX_ALLOWED_SHARE_GAP like every other wait.
-    share_gap_min: float = 2.0
-    share_gap_max: float = 3.0
+    # Wait BETWEEN consecutive group-shares (group to group AND listing to
+    # listing) is its own category. History: first spec 2-3s (2026-09-24),
+    # raised by the user to uniform 10-15s (2026-09-25) — one share per
+    # group is a full composer publish, so it deserves the group-change
+    # pacing. Capped at MAX_ALLOWED_SHARE_GAP (20s) like every other wait.
+    share_gap_min: float = 10.0
+    share_gap_max: float = 15.0
 
     log_dir: Path = field(default=Path(".local-capture/logs"))
     screenshot_dir: Path = field(default=Path(".local-capture/shots"))
@@ -254,8 +255,8 @@ def load_config(env_file: Path | str | None = None) -> Config:
             get("AP_CROSSPOST_ACTION_MIN_SECONDS"), 1.0),
         crosspost_action_max=_as_float(
             get("AP_CROSSPOST_ACTION_MAX_SECONDS"), 3.0),
-        share_gap_min=_as_float(get("AP_SHARE_GAP_MIN_SECONDS"), 2.0),
-        share_gap_max=_as_float(get("AP_SHARE_GAP_MAX_SECONDS"), 3.0),
+        share_gap_min=_as_float(get("AP_SHARE_GAP_MIN_SECONDS"), 10.0),
+        share_gap_max=_as_float(get("AP_SHARE_GAP_MAX_SECONDS"), 15.0),
         type_delay_min_ms=_as_int(get("AP_TYPE_DELAY_MIN_MS"), 30),
         type_delay_max_ms=_as_int(get("AP_TYPE_DELAY_MAX_MS"), 90),
         log_dir=_as_path(get("AP_LOG_DIR"), ".local-capture/logs"),
