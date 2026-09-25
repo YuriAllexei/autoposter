@@ -119,30 +119,44 @@ async def _ensure_text_1to1(page: Page, box, text: str, cfg: Config, log: log_fn
     post, human jitter) and re-read; still mismatched = FlowError, we never
     publish text that failed read-back.
     """
+    def ok(got: str, want: str) -> bool:
+        if got == want:
+            return True
+        # FB auto-inserts spaces around linkified text (URL glued to emoji
+        # grew 2 chars per line on the 2026-09-25 share ladder); whitespace
+        # is the ONLY concession — every content char stays strict.
+        ws = lambda x: re.sub(r"\s+", " ", x).strip()
+        return ws(got) == ws(want)
     await box.click()
-    lines = text.split("\n")
-    for i, line in enumerate(lines):
-        if i:
-            await page.keyboard.press("Enter")     # composer line break, 1:1
-        if line:
-            await page.evaluate(
-                "(t) => document.execCommand('insertText', false, t)", line)
-    await page.wait_for_timeout(800)
-    got = (await box.inner_text()).strip()
-    if got != text.strip():
-        log(f"paste read-back mismatch ({len(got)} chars vs {len(text)}) — "
-            f"falling back to keyboard.type once")
-        await box.click()
-        await page.keyboard.type(text, delay=random.randint(cfg.type_delay_min_ms,
-                                                           cfg.type_delay_max_ms))
+    for attempt in (1, 2):
+        if attempt == 2:
+            # CLEAR FIRST (share-ladder lesson): retyping appended to the
+            # failed paste (339 + 349 -> 723) and made retry impossible.
+            await box.click()
+            await page.keyboard.press("Control+a")
+            await page.keyboard.press("Backspace")
+            await page.wait_for_timeout(300)
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            if i:
+                await page.keyboard.press("Enter")   # composer line break, 1:1
+            if line:
+                await page.evaluate(
+                    "(t) => document.execCommand('insertText', false, t)",
+                    line)
         await page.wait_for_timeout(800)
         got = (await box.inner_text()).strip()
-        if got != text.strip():
-            raise FlowError(
-                f"composer text mismatch after typing ({len(got)} chars vs "
-                f"{len(text)}) — refusing to continue"
-            )
-    log(f"text pasted 1:1 ({len(text)} chars, read-back verified)")
+        if ok(got, text.strip()):
+            log(f"text pasted 1:1 ({len(text)} chars, read-back verified)")
+            return
+        if attempt == 1:
+            log(f"paste read-back mismatch ({len(got)} chars vs "
+                f"{len(text)}) — clearing and re-pasting once")
+    shot = await dump_evidence(page, cfg.screenshot_dir,
+                               "share_text_mismatch")
+    raise FlowError(
+        f"composer text mismatch after paste+retry — refusing to "
+        f"continue. Evidence: {shot}")
 
 
 # ---- the photo attach (rule 3 contract) --------------------------------------
@@ -1259,7 +1273,12 @@ async def stage_or_publish_share(page: Page, cfg: Config, log: log_fn = print,
                                    "crossshare_preview_stuck")
         raise FlowError(f"share link preview never settled (still "
                         f"'{SHARE_PREVIEW_PENDING}'). Evidence: {shot}") from e
-    box = page.locator('div[role="dialog"] [contenteditable="true"]').first
+    #: scope to the composer's OWN placeholder: the hub/picker dialogs may
+    #: linger hidden with their own contenteditables ('Haz un comentario...')
+    #: and .first would click a phantom (dry ladder 2026-09-25).
+    box = page.locator(
+        'div[role="dialog"] [contenteditable="true"]'
+        f'[aria-placeholder="{SHARE_COMPOSER_PLACEHOLDER}"]').first
     await _ensure_text_1to1(page, box, description, cfg, log)
     if cfg.dry_run:
         shot = await dump_evidence(page, cfg.screenshot_dir, "crossshare_staged")

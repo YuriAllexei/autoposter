@@ -18,6 +18,7 @@ import asyncio
 
 import pytest
 
+import poster.flows as fl
 from poster import flows
 from poster.config import Config
 from poster.flows import (
@@ -86,6 +87,9 @@ class FakeKeyboard:
         self.presses.append(key)
         if key == "Enter":
             self.composer.content += "\n"
+        elif key == "Backspace" and self.presses[-2:] == ["Control+a",
+                                                          "Backspace"]:
+            self.composer.content = ""      # gate's clear-before-retry
 
     async def down(self, key):
         self.held.append(key)
@@ -241,28 +245,33 @@ def test_single_line_text_needs_no_enter():
 
 # ---- (c) one fallback on read-back mismatch -----------------------------------
 
-def test_readback_mismatch_falls_back_to_typing_once_then_succeeds():
+def test_readback_mismatch_clears_and_repastes_once_then_succeeds():
+    """Ladder lesson 2026-09-25: the old fallback APPENDED (339+349=723);
+    the gate now clears and replays the paste path, never raw typing."""
     page = FakePage(Composer(read_overrides=["texto basura"]))
     text = "uno\ndos"
     logs = []
     asyncio.run(_ensure_text_1to1(page, page.box, text, _cfg(), logs.append))
 
-    assert len(page.keyboard.types) == 1                 # exactly ONE fallback
-    typed, delay = page.keyboard.types[0]
-    assert typed == text                                 # whole post retyped
-    assert isinstance(delay, int) and 30 <= delay <= 90  # cfg jitter kept
-    assert page.composer.reads == 2                      # re-read after fallback
-    assert not any("mismatch" in m for m in logs if "refusing" in m)
+    assert page.keyboard.types == []                    # char-by-char gone
+    assert "Control+a" in page.keyboard.presses         # clear ran
+    assert page.composer.content == text                # rebuilt by re-paste
+    assert page.composer.reads == 2                     # re-read after retry
+    assert any("clearing and re-pasting" in m for m in logs)
 
 
 # ---- (d) double mismatch is a hard stop ---------------------------------------
 
-def test_double_mismatch_raises_flow_error():
+def test_double_mismatch_raises_flow_error_with_evidence(monkeypatch):
+    async def fake_ev(page, dir, tag, **kw):
+        return f"{tag}.png"
+    monkeypatch.setattr(fl, "dump_evidence", fake_ev)
     page = FakePage(Composer(read_overrides=["basura 1", "basura 2"]))
-    with pytest.raises(FlowError, match="refusing to continue"):
-        asyncio.run(_ensure_text_1to1(page, page.box, "uno\ndos", _cfg(), lambda *_: None))
-    assert len(page.keyboard.types) == 1   # fallback attempted once, then abort
-    assert page.composer.reads == 2
+    with pytest.raises(FlowError, match="refusing to continue") as excinfo:
+        asyncio.run(_ensure_text_1to1(page, page.box, "uno\ndos", _cfg(),
+                                      lambda *_: None))
+    assert page.composer.reads == 2         # paste, retry, then abort
+    assert "Evidence: share_text_mismatch.png" in str(excinfo.value)
 
 
 # ---- (e) sleep policy: photo batches fast, publish still delayed --------------
