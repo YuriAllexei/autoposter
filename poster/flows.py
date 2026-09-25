@@ -1191,6 +1191,10 @@ async def _share_search(page: Page, query: str, name: str, cfg: Config,
 
 #: scrolls the picker dialog's inner list container; returns True while the
 #: scroll position could still advance (pagination rides this motion).
+#: one scroll increment per call (IntersectionObserver lazy-load needs
+#: PROGRESSIVE motion — jumping straight to the bottom never fires the
+#: next page; proven by scripts/probe_picker_scroll.py 2026-09-25).
+#: Returns True while the bottom is still ahead.
 _SCROLL_PICKER_JS = r"""
 () => {
   const ds = [...document.querySelectorAll('[role="dialog"]')]
@@ -1202,9 +1206,10 @@ _SCROLL_PICKER_JS = r"""
         && /auto|scroll/.test(getComputedStyle(e).overflowY));
   if (!cs.length) return false;
   const el = cs.sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
-  const grew = el.scrollTop + el.clientHeight < el.scrollHeight - 4;
-  el.scrollTop = el.scrollHeight;
-  return grew;
+  const before = el.scrollTop;
+  el.scrollTop = before + el.clientHeight * 0.8;
+  return el.scrollTop + el.clientHeight < el.scrollHeight - 4
+      || el.scrollTop > before;
 }
 """
 
@@ -1255,8 +1260,15 @@ async def discover_share_groups(page: Page, listing, cfg: Config,
         groups = list(await open_share_hub(page, listing, cfg, log))
         seen = {str(g["id"]) for g in groups}
         stable = 0
-        for _ in range(40):
+        await page.wait_for_timeout(2500)   # let the first page settle
+        for _ in range(25):
             before = len(groups)
+            # a few progressive steps per round, small dwells between them
+            grew = False
+            for _step in range(4):
+                grew = await page.evaluate(_SCROLL_PICKER_JS) or grew
+                await page.wait_for_timeout(500)
+            await page.wait_for_timeout(900)  # page N lands ~1-2 s late
             texts = await asyncio.gather(*bodies, return_exceptions=True)
             for text in texts:
                 if isinstance(text, BaseException):
@@ -1266,11 +1278,9 @@ async def discover_share_groups(page: Page, listing, cfg: Config,
                         seen.add(str(g["id"]))
                         groups.append({"id": g["id"], "name": g["name"]})
             del bodies[:]
-            grew = await page.evaluate(_SCROLL_PICKER_JS)
-            await page.wait_for_timeout(700)
             if len(groups) == before:
                 stable += 1
-                if stable >= 3 and not grew:
+                if stable >= 4 and not grew:
                     break
             else:
                 stable = 0
