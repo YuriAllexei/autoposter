@@ -11,9 +11,12 @@ import time
 import urllib.error
 import urllib.request
 
-from .results import STATUS_FAILED, STATUS_SKIPPED
+from .results import STATUS_FAILED, STATUS_PUBLISHED, STATUS_SKIPPED, STATUS_STAGED
 
 EMBED_DESC_LIMIT = 4096
+#: share runs fan out (N listings x M groups): never flood the channel — one
+#: aggregate line per listing plus at most this many failure/skip details.
+MAX_SHARE_DETAIL_LINES = 10
 COLOR_OK, COLOR_DRY, COLOR_BAD = 0x2ECC71, 0xF1C40F, 0xE74C3C
 # Discord sits behind Cloudflare: the default Python-urllib UA gets HTTP 403
 # error code 1010 (proven 2026-09-17), so we must announce ourselves.
@@ -103,6 +106,78 @@ def build_crosspost_payload(summary: dict, profile_name: str = "") -> dict:
             "color": color,
             "timestamp": summary["started"],
             "footer": {"text": f"ledger: .local-capture results · run {summary['run_id']}"},
+        }],
+    }
+
+
+def build_share_payload(summary: dict, profile_name: str = "") -> dict:
+    """summary = RunRecorder.summary_share() — ONE embed per share run.
+
+    AGGREGATED on purpose (user spec 2026-09-24): the run shares every listing
+    into every group, so N listings x M groups = N*M rows and one line per row
+    would be useless. The body is one aggregate line per listing, then up to
+    MAX_SHARE_DETAIL_LINES individual failure/skip lines, then "+N more".
+    Same never-fails philosophy as the other builders: pure function.
+    """
+    dry = summary["dry_run"]
+    aborted = summary.get("aborted")
+    bad = bool(aborted) or summary["failed"] > 0
+    color = COLOR_BAD if bad else (COLOR_DRY if dry else COLOR_OK)
+    done = summary["published"] + summary["staged"]
+    head = (f"**Shares {'staged (dry run)' if dry else 'published'}: {done}/"
+            f"{summary['attempted']}** · **Failed: {summary['failed']}** · "
+            f"**Duration: {summary['duration_s']}s**")
+    lines = [f"**⛔ Run aborted:** {aborted}" if aborted else head]
+
+    # aggregate per listing: how many shares landed there
+    per: dict[str, dict] = {}
+    for r in summary.get("shares", []):
+        lid = str(r["listing_id"])
+        agg = per.setdefault(lid, {"title": str(r["listing_title"])[:70],
+                                   "ok": 0, "delivered": None})
+        if r["status"] in (STATUS_STAGED, STATUS_PUBLISHED):
+            agg["ok"] += 1
+            if agg["delivered"] is None:
+                agg["delivered"] = r.get("delivered")
+    verdicts = {"pending": " · ⏳ pending admin review",
+                "live": " · 🟢 visible",
+                "unknown": " · ❔ visibility unverified"}
+    for agg in per.values():
+        if agg["ok"] <= 0:               # nothing landed: details speak for it
+            continue
+        if dry:
+            lines.append(f"🧪 {agg['title']} — {agg['ok']} staged")
+        else:
+            lines.append(f"✅ {agg['title']} — {agg['ok']} published"
+                         f"{verdicts.get(str(agg['delivered'] or ''), '')}")
+
+    bad_rows = [r for r in summary.get("shares", [])
+                if r["status"] in (STATUS_FAILED, STATUS_SKIPPED)]
+    for r in bad_rows[:MAX_SHARE_DETAIL_LINES]:
+        where = f"{str(r['listing_title'])[:40]} · {str(r['group_name'])[:40]}"
+        if r["status"] == STATUS_FAILED:
+            lines.append(f"❌ {where} — `{str(r.get('error') or '')[:90]}`")
+        else:
+            lines.append(f"⏭️ {where} — {str(r.get('error') or '')[:90]}")
+    if len(bad_rows) > MAX_SHARE_DETAIL_LINES:
+        lines.append(f"+ {len(bad_rows) - MAX_SHARE_DETAIL_LINES} more")
+
+    totals = summary.get("totals_shares_all_time", {})
+    if totals:
+        lines.append(f"Totals — all-time shares: {sum(totals.values())} "
+                     f"across {len(totals)} listing(s)")
+    title = (f"autoposter share · {profile_name or 'autoposter'} · "
+             f"{'DRY RUN' if dry else 'LIVE'} · {summary['run_id']}")
+    footer = (f"{'DRY RUN · ' if dry else ''}ledger: .local-capture results "
+              f"· run {summary['run_id']}")
+    return {
+        "username": "autoposter",
+        "embeds": [{
+            "title": title[:256],
+            "description": "\n".join(lines)[:EMBED_DESC_LIMIT],
+            "color": color,
+            "timestamp": summary["started"],
+            "footer": {"text": footer},
         }],
     }
 

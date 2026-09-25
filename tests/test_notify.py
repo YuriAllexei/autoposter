@@ -121,3 +121,77 @@ def test_crosspost_payload_shows_verdict_on_batch_lines():
     desc = build_crosspost_payload(summary)["embeds"][0]["description"]
     assert "✅ Tahoe — batch 0: 20 groups · ⏳ pending admin review" in desc
     assert "all-time batches: 2" in desc
+
+
+# ---- SHARE payload: AGGREGATED (one line per listing, capped failure list) ----
+
+def _share_row(lid, title, gid, status="staged", error=None, delivered=None):
+    return {"listing_id": lid, "listing_title": title, "group_id": gid,
+            "group_name": f"GRUPO {gid}", "status": status, "error": error,
+            "delivered": delivered}
+
+
+def _share_summary(**over):
+    """3 listings x 40 groups = the 120-share matrix, all staged."""
+    listings = [("L1", "2019 Chevrolet Tahoe LT"),
+                ("L2", "FORD F150 XLT 2018"),
+                ("L3", "Honda CR-V 2020")]
+    rows = [_share_row(lid, title, str(n), "staged")
+            for lid, title in listings for n in range(40)]
+    base = {"run_id": "S1", "dry_run": True, "aborted": None,
+            "started": "2026-09-24T12:00:00+00:00", "duration_s": 300.0,
+            "published": 0, "staged": len(rows), "failed": 0, "skipped": 0,
+            "attempted": len(rows), "shares": rows, "share_lines": len(rows),
+            "totals_shares_all_time": {}}
+    return {**base, **over}
+
+
+def test_share_payload_aggregates_120_rows_into_one_embed():
+    from poster.notify import build_share_payload
+    p = build_share_payload(_share_summary())
+    assert len(p["embeds"]) == 1                     # never one line per group
+    desc = p["embeds"][0]["description"]
+    assert len(desc.splitlines()) <= 14              # 120 shares, few lines
+    assert "🧪 2019 Chevrolet Tahoe LT — 40 staged" in desc
+    assert "🧪 Honda CR-V 2020 — 40 staged" in desc
+    assert "Shares staged (dry run): 120/120" in desc
+    assert p["embeds"][0]["color"] == 0xF1C40F       # amber = dry
+    json.dumps(p)
+
+
+def test_share_payload_caps_failure_lines_and_counts_the_rest():
+    from poster.notify import build_share_payload
+    rows = [_share_row("L1", "Tahoe", str(n), "failed", "flow_error: boom")
+            for n in range(25)]
+    s = _share_summary(shares=rows, staged=0, failed=25, attempted=25,
+                       dry_run=False)
+    desc = build_share_payload(s)["embeds"][0]["description"]
+    assert desc.count("❌") == 10                     # capped at 10 details
+    assert "+ 15 more" in desc                       # overflow summarised
+    assert len(desc.splitlines()) <= 14
+
+
+def test_share_payload_live_shows_published_and_totals():
+    from poster.notify import build_share_payload
+    rows = [_share_row("L1", "Tahoe", "1", "published", delivered="pending"),
+            _share_row("L1", "Tahoe", "2", "published", delivered="live"),
+            _share_row("L1", "Tahoe", "3", "skipped", "not offerable")]
+    s = _share_summary(shares=rows, dry_run=False, staged=0, published=2,
+                       skipped=1, attempted=3)
+    s["totals_shares_all_time"] = {"L1": 7}
+    e = build_share_payload(s)["embeds"][0]
+    assert e["color"] == 0x2ECC71                    # green = live, no failure
+    assert "✅ Tahoe — 2 published" in e["description"]
+    assert "⏭️" in e["description"]                   # skip is surfaced
+    assert "all-time shares: 7" in e["description"]
+    assert "DRY RUN" not in e["footer"]["text"]
+
+
+def test_share_payload_abort_and_dry_footer():
+    from poster.notify import build_share_payload
+    s = _share_summary(aborted="joined-groups fetch failed", shares=[],
+                       staged=0, attempted=0)
+    e = build_share_payload(s)["embeds"][0]
+    assert "**⛔ Run aborted:** joined-groups fetch failed" in e["description"]
+    assert e["color"] == 0xE74C3C
+    assert "DRY RUN" in e["footer"]["text"]

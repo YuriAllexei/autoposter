@@ -26,6 +26,13 @@ MAX_ALLOWED_GROUP_SWITCH = 20.0
 #: ~2 min between batches of one listing AND between listings); capped.
 MAX_ALLOWED_CROSSPOST_GAP = 300.0
 
+#: share-to-share gap is its own category (user spec 2026-09-24: 2-3s between
+#: one share and the next — group to group AND listing to listing); own
+#: ceiling so a .env typo can never park the share pipeline for minutes. The
+#: general MAX_ALLOWED_DELAY (7s) deliberately does NOT apply here, exactly
+#: like the crosspost gap above.
+MAX_ALLOWED_SHARE_GAP = 20.0
+
 
 def _as_bool(v: str | None, default: bool) -> bool:
     if v is None or v.strip() == "":
@@ -122,6 +129,14 @@ class Config:
     crosspost_action_min: float = 1.0
     crosspost_action_max: float = 3.0
 
+    # ---- individual SHARE pipeline (poster/share.py) ----
+    # Explicit user rule (2026-09-24): the wait BETWEEN one share and the
+    # next — group to group AND listing to listing — is its own category,
+    # uniform 2-3s (the 10-15s group-change category is NOT used here).
+    # Capped at MAX_ALLOWED_SHARE_GAP like every other wait.
+    share_gap_min: float = 2.0
+    share_gap_max: float = 3.0
+
     log_dir: Path = field(default=Path(".local-capture/logs"))
     screenshot_dir: Path = field(default=Path(".local-capture/shots"))
 
@@ -175,6 +190,14 @@ class Config:
                                      MAX_ALLOWED_CROSSPOST_GAP)
         self.crosspost_gap_min = min(self.crosspost_gap_min,
                                      self.crosspost_gap_max)
+        if (self.share_gap_min < 0
+                or self.share_gap_max < self.share_gap_min):
+            raise ValueError(
+                f"invalid share-gap config: AP_SHARE_GAP_MIN_SECONDS="
+                f"{self.share_gap_min} AP_SHARE_GAP_MAX_SECONDS="
+                f"{self.share_gap_max} (need 0 <= min <= max)")
+        self.share_gap_max = min(self.share_gap_max, MAX_ALLOWED_SHARE_GAP)
+        self.share_gap_min = min(self.share_gap_min, self.share_gap_max)
 
     @property
     def identity_label(self) -> str:
@@ -231,6 +254,8 @@ def load_config(env_file: Path | str | None = None) -> Config:
             get("AP_CROSSPOST_ACTION_MIN_SECONDS"), 1.0),
         crosspost_action_max=_as_float(
             get("AP_CROSSPOST_ACTION_MAX_SECONDS"), 3.0),
+        share_gap_min=_as_float(get("AP_SHARE_GAP_MIN_SECONDS"), 2.0),
+        share_gap_max=_as_float(get("AP_SHARE_GAP_MAX_SECONDS"), 3.0),
         type_delay_min_ms=_as_int(get("AP_TYPE_DELAY_MIN_MS"), 30),
         type_delay_max_ms=_as_int(get("AP_TYPE_DELAY_MAX_MS"), 90),
         log_dir=_as_path(get("AP_LOG_DIR"), ".local-capture/logs"),
