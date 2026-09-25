@@ -1213,6 +1213,47 @@ _SCROLL_PICKER_JS = r"""
 }
 """
 
+#: enumerates the picker's VISIBLE rows after scrolling: FB renders every
+#: offerable group in the DOM (probe 2026-09-25: ~44 rows) while the graphql
+#: payloads cap at 10 — the dialog list is the source of truth (user rule).
+_SCRAPE_PICKER_ROWS_JS = r"""
+() => {
+  const ds = [...document.querySelectorAll('[role="dialog"]')]
+    .filter((d) => d.getAttribute('aria-modal') === 'true');
+  const d = ds[ds.length - 1];
+  if (!d) return [];
+  const cs = [...d.querySelectorAll('*')].filter((e) =>
+    e.scrollHeight > e.clientHeight + 24
+    && /auto|scroll/.test(getComputedStyle(e).overflowY));
+  if (!cs.length) return [];
+  const el = cs.sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
+  const out = [];
+  for (const r of el.querySelectorAll('[role="button"],[role="link"],li')) {
+    const raw = (r.innerText || "").trim();
+    const lines = raw.split("\n").map((x) => x.trim()).filter(Boolean);
+    if (lines.length < 2) continue;
+    if (!/miembros|p[uú]blico|privado/i.test(raw)) continue;
+    out.push({name: lines[0]});
+  }
+  return out;
+}
+"""
+
+
+async def _picker_dom_groups(page: Page) -> list[dict]:
+    """[{name}] of every group row currently mounted in the picker list."""
+    try:
+        rows = await page.evaluate(_SCRAPE_PICKER_ROWS_JS)
+    except Exception:
+        return []
+    out = []
+    for r in rows or []:
+        name = str(r.get("name") or "").strip()
+        if name:
+            out.append({"name": name})
+    return out
+
+
 #: closes whatever share dialogs are still stacked: Escape until no
 #: aria-modal dialog remains (condition-wait, never an immediate count()).
 _WAIT_NO_DIALOG_JS = """
@@ -1257,34 +1298,56 @@ async def discover_share_groups(page: Page, listing, cfg: Config,
 
     page.on("response", on_resp)
     try:
-        groups = list(await open_share_hub(page, listing, cfg, log))
-        seen = {str(g["id"]) for g in groups}
+        first = list(await open_share_hub(page, listing, cfg, log))
+        payload = list(first)                      # ids: authoritative page 1
+        seen = {str(g["id"]) for g in first}
+        await page.wait_for_timeout(2500)          # let the first page settle
         stable = 0
-        await page.wait_for_timeout(2500)   # let the first page settle
-        for _ in range(25):
-            before = len(groups)
-            # a few progressive steps per round, small dwells between them
+        for _round in range(25):
             grew = False
-            for _step in range(4):
+            for _step in range(4):                 # progressive motion: the
                 grew = await page.evaluate(_SCROLL_PICKER_JS) or grew
-                await page.wait_for_timeout(500)
-            await page.wait_for_timeout(900)  # page N lands ~1-2 s late
+                await page.wait_for_timeout(500)   # lazy loader needs it
+            await page.wait_for_timeout(900)       # late payloads
             texts = await asyncio.gather(*bodies, return_exceptions=True)
+            del bodies[:]
+            fresh = 0
             for text in texts:
                 if isinstance(text, BaseException):
                     continue
                 for g in parse_share_targets(text):
                     if str(g["id"]) not in seen:
                         seen.add(str(g["id"]))
-                        groups.append({"id": g["id"], "name": g["name"]})
-            del bodies[:]
-            if len(groups) == before:
+                        payload.append(g)
+                        fresh += 1
+            dom = await _picker_dom_groups(page)
+            if not grew and fresh == 0 and (dom or not payload):
                 stable += 1
-                if stable >= 4 and not grew:
+                if stable >= 3:
                     break
             else:
                 stable = 0
-        _tag_ranks(groups)   # re-rank on the FULL list (page-1 ranks shift)
+        dom = await _picker_dom_groups(page)
+        rows = dom or [{"name": str(g["name"])} for g in payload]
+        occp: dict = {}
+        ids: dict = {}
+        for g in payload:                          # kth occurrence of a name
+            key = _norm(g["name"])                 # in payload == kth in DOM
+            ids.setdefault((key, occp.get(key, 0)), str(g["id"]))
+            occp[key] = occp.get(key, 0) + 1
+        occd: dict = {}
+        groups = []
+        for r in rows:
+            key = _norm(r["name"])
+            o = occd.get(key, 0)
+            occd[key] = o + 1
+            groups.append({"id": ids.get((key, o)) or f"dom-{key[:24] or 'g'}-{o}",
+                           "name": r["name"]})
+        _tag_ranks(groups)
+        if dom and len(dom) > len(payload):
+            log(f"share: picker DOM has {len(dom)} rows vs {len(payload)} "
+                "payload ids (rest carry dom- synthetic ids - search picks "
+                "them by name anyway)")
         log(f"share: picker offers {len(groups)} group(s) for "
             f"{_obj_field(listing, 'title')[:40]!r}")
         return groups

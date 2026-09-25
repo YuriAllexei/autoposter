@@ -515,3 +515,61 @@ def test_hub_group_circle_polls_until_dialog_hydrates(tmp_path, monkeypatch):
                                                 lambda *a: None))
     assert loc.sel == '[data-ap-share-group="1"]'
     assert sum(1 for e, _ in page.evals if e == fl._STAMP_HUB_GROUP_JS) == 3
+
+
+# ---- discover_share_groups: DOM list is the source of truth ------------------
+
+class _DiscPage:
+    """Minimal fake for discovery: scripted scroll/scrape evaluates."""
+
+    def __init__(self, rows, grew=False):
+        self.rows = rows
+        self.grew = grew
+        self.timeouts = []
+
+    def on(self, *a):
+        pass
+
+    def remove_listener(self, *a):
+        pass
+
+    async def wait_for_timeout(self, ms):
+        self.timeouts.append(ms)
+
+    async def wait_for_function(self, expr, arg=None, timeout=None):
+        return None                       # dialogs "gone" instantly
+
+    async def evaluate(self, js, arg=None):
+        if js is fl._SCROLL_PICKER_JS:
+            return self.grew
+        if js is fl._SCRAPE_PICKER_ROWS_JS:
+            return self.rows
+        raise AssertionError("unexpected evaluate")
+
+
+def test_discover_uses_dom_rows_and_splices_payload_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr(fl, "SHARE_STEP_TIMEOUT_MS", 50)
+
+    async def fake_open(page, listing, cfg, log=print):
+        return [{"id": str(i), "name": n, "rank": 0}
+                for i, n in enumerate(["Alpha", "Bravo"])]
+    monkeypatch.setattr(fl, "open_share_hub", fake_open)
+    rows = [{"name": "Alpha"}, {"name": "Bravo"}, {"name": "Charlie"},
+            {"name": "ALPHA"}]                      # duplicate, unseen in payload
+    groups = asyncio.run(fl.discover_share_groups(
+        _DiscPage(rows), {"title": "T"}, _cfg(tmp_path), lambda *a: None))
+    assert [g["name"] for g in groups] == ["Alpha", "Bravo", "Charlie", "ALPHA"]
+    assert groups[0]["id"] == "0" and groups[1]["id"] == "1"
+    assert str(groups[2]["id"]).startswith("dom-")   # no payload id -> synthetic
+    assert groups[0]["rank"] == 0 and groups[3]["rank"] == 1  # ALPHA == alpha
+
+
+def test_discover_falls_back_to_payload_when_dom_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(fl, "SHARE_STEP_TIMEOUT_MS", 50)
+
+    async def fake_open(page, listing, cfg, log=print):
+        return [{"id": "9", "name": "Only", "rank": 0}]
+    monkeypatch.setattr(fl, "open_share_hub", fake_open)
+    groups = asyncio.run(fl.discover_share_groups(
+        _DiscPage([]), {"title": "T"}, _cfg(tmp_path), lambda *a: None))
+    assert groups == [{"id": "9", "name": "Only", "rank": 0}]
