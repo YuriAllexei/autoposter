@@ -114,6 +114,10 @@ class FakeLocator:
     async def click(self, timeout=None):
         self.page.clicks.append(self.sel)
 
+    async def evaluate(self, expr, *a):
+        # _clear_editor's verified-empty probe: fake boxes start empty
+        return 0
+
     async def wait_for(self, state=None, timeout=None):
         self.page.waits.append((self.sel, timeout))
         if self.page.sel_wait_raises.get(self.sel):

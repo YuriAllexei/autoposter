@@ -43,14 +43,14 @@ def _cfg(tmp_path, **kw) -> Config:
     return Config(**base)
 
 
-def test_share_gap_defaults_are_2_3(tmp_path):
+def test_share_gap_defaults_are_10_15(tmp_path):
     cfg = load_config(env_file=tmp_path / "absent.env")
-    assert (cfg.share_gap_min, cfg.share_gap_max) == (2.0, 3.0)
+    assert (cfg.share_gap_min, cfg.share_gap_max) == (10.0, 15.0)
 
 
-def test_shipped_env_example_share_gap_is_2_3():
+def test_shipped_env_example_share_gap_is_10_15():
     cfg = load_config(env_file=REPO / ".env.example")
-    assert (cfg.share_gap_min, cfg.share_gap_max) == (2.0, 3.0)
+    assert (cfg.share_gap_min, cfg.share_gap_max) == (10.0, 15.0)
 
 
 def test_share_gap_capped_at_20s_and_validated(tmp_path):
@@ -70,7 +70,7 @@ def test_share_gap_garbage_falls_back_to_defaults(tmp_path):
     env.write_text("AP_SHARE_GAP_MIN_SECONDS=abc\n"
                    "AP_SHARE_GAP_MAX_SECONDS=\n", encoding="utf-8")
     cfg = load_config(env_file=env)
-    assert (cfg.share_gap_min, cfg.share_gap_max) == (2.0, 3.0)
+    assert (cfg.share_gap_min, cfg.share_gap_max) == (10.0, 15.0)
 
 
 # ---------------------------------------------------------------------------
