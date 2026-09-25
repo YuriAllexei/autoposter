@@ -43,11 +43,11 @@ CONFIRM_PHRASE = "PUBLICAR"
 # `has_cli_main`.
 MODE_SPECS: dict[str, dict[str, Any]] = {
     "groups": {"module": "poster.main", "dry_flag": "--dry-run",
-               "live_allowed": True, "label": "group posting run"},
+               "live_allowed": True, "label": "Entire Inventory Distribution run"},
     "crosspost": {"module": "poster.crosspost", "dry_flag": "--dry-run",
-                  "live_allowed": True, "label": "marketplace crosspost run"},
+                  "live_allowed": True, "label": "Initial Post Sharing run"},
     "share": {"module": "poster.share", "dry_flag": "--dry-run",
-              "live_allowed": False, "label": "marketplace share run"},
+              "live_allowed": False, "label": "Individual Listing Sequential Group Posting run"},
     "groups-refresh": {"module": "poster.main", "dry_flag": "--list-groups",
                        "live_allowed": False, "label": "joined-groups refresh"},
     "listings-refresh": {"module": "poster.listings", "dry_flag": "",

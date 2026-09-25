@@ -1189,6 +1189,103 @@ async def _share_search(page: Page, query: str, name: str, cfg: Config,
     return promised
 
 
+#: scrolls the picker dialog's inner list container; returns True while the
+#: scroll position could still advance (pagination rides this motion).
+_SCROLL_PICKER_JS = r"""
+() => {
+  const ds = [...document.querySelectorAll('[role="dialog"]')]
+    .filter((d) => d.getAttribute('aria-modal') === 'true');
+  const d = ds[ds.length - 1];
+  if (!d) return false;
+  const cs = [...d.querySelectorAll('*')].filter(
+    (e) => e.scrollHeight > e.clientHeight + 24
+        && /auto|scroll/.test(getComputedStyle(e).overflowY));
+  if (!cs.length) return false;
+  const el = cs.sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
+  const grew = el.scrollTop + el.clientHeight < el.scrollHeight - 4;
+  el.scrollTop = el.scrollHeight;
+  return grew;
+}
+"""
+
+#: closes whatever share dialogs are still stacked: Escape until no
+#: aria-modal dialog remains (condition-wait, never an immediate count()).
+_WAIT_NO_DIALOG_JS = """
+() => ![...document.querySelectorAll('[role="dialog"]')]
+        .some((d) => d.getAttribute('aria-modal') === 'true')
+"""
+
+
+async def dismiss_share_dialogs(page: Page, cfg: Config,
+                                log: log_fn = print) -> None:
+    """Best-effort: press Escape (max 5x) until no modal dialog is left.
+    Replaces navigating away between shares (user rule 2026-09-25: page
+    reloads between posts look robotic)."""
+    for _ in range(5):
+        try:
+            await page.wait_for_function(_WAIT_NO_DIALOG_JS, timeout=700)
+            return
+        except PWTimeoutError:
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(300)
+    log("share: dialogs still open after 5 Escapes (left as-is)")
+
+
+async def discover_share_groups(page: Page, listing, cfg: Config,
+                                log: log_fn = print) -> list[dict]:
+    """The picker's FULL list, from the picker itself: open hub -> 'Grupo'
+    -> scroll the list to the bottom, accumulating every
+    CometGroupResharesSearchDataSource page, until 3 consecutive rounds add
+    nothing. Returns ranked [{id,name,rank}] in first-seen order, then
+    closes the dialogs. The 'Groups you joined' page is NOT consulted —
+    the picker is the only truth about where this listing may be shared
+    (user rule 2026-09-25)."""
+    bodies: list = []
+
+    def on_resp(resp) -> None:
+        try:
+            req = resp.request
+            if "graphql" in req.url and XPOST_GROUPS_OP in (req.post_data or ""):
+                bodies.append(resp.text())
+        except Exception:
+            pass
+
+    page.on("response", on_resp)
+    try:
+        groups = list(await open_share_hub(page, listing, cfg, log))
+        seen = {str(g["id"]) for g in groups}
+        stable = 0
+        for _ in range(40):
+            before = len(groups)
+            texts = await asyncio.gather(*bodies, return_exceptions=True)
+            for text in texts:
+                if isinstance(text, BaseException):
+                    continue
+                for g in parse_share_targets(text):
+                    if str(g["id"]) not in seen:
+                        seen.add(str(g["id"]))
+                        groups.append({"id": g["id"], "name": g["name"]})
+            del bodies[:]
+            grew = await page.evaluate(_SCROLL_PICKER_JS)
+            await page.wait_for_timeout(700)
+            if len(groups) == before:
+                stable += 1
+                if stable >= 3 and not grew:
+                    break
+            else:
+                stable = 0
+        _tag_ranks(groups)   # re-rank on the FULL list (page-1 ranks shift)
+        log(f"share: picker offers {len(groups)} group(s) for "
+            f"{_obj_field(listing, 'title')[:40]!r}")
+        return groups
+    finally:
+        try:
+            page.remove_listener("response", on_resp)
+        except Exception:
+            pass
+        await dismiss_share_dialogs(page, cfg, log)
+
+
 async def pick_share_group(page: Page, group, cfg: Config,
                            log: log_fn = print) -> None:
     """A3: search the group in the picker and click its row, then read back

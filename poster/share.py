@@ -32,7 +32,6 @@ from . import flows as fl
 from .config import Config, load_config
 from .fb import adopt_identity, launch
 from .flows import FlowError, human_sleep
-from .groups_fetch import GroupsFetchError, fetch_joined_groups
 from .listings import ListingsFetchError, fetch_active_listings
 from .notify import build_share_payload, send_summary
 from .results import STATUS_PUBLISHED, STATUS_STAGED, RunRecorder
@@ -160,27 +159,28 @@ async def _open_share_hub(page, listing: dict, cfg: Config, log, on_groups):
 # ---------------------------------------------------------------------------
 
 async def run_listing(page, cfg: Config, recorder: RunRecorder, listing: dict,
-                      plan: list, log, desc_cache: dict, done: set,
+                      log, desc_cache: dict, done: set, only_group=None,
                       is_last_listing: bool = False) -> int:
-    """Share ONE listing into each group of `plan`, one dialog per share.
+    """Share ONE listing into every group THE PICKER offers for it, one
+    dialog per share. The plan comes from discover_share_groups (the
+    scrollable 'Compartir -> Grupo' list), never from the joins page (user
+    rule 2026-09-25). `only_group` (--group) restricts it.
 
-    Sleep categories (user rules): the ACTION category (AP_CROSSPOST_ACTION_*)
-    before each share, and the SHARE-GAP category (AP_SHARE_GAP_*, 2-3s)
-    BETWEEN consecutive shares — group to group and listing to listing — and
-    NEVER after the last share of the whole run. `is_last_listing` is how this
-    function knows its final group is the run's final share.
+    NAVIGATION RULE (user 2026-09-25): page.goto happens ONCE per listing
+    (returning from the description fetch). Between shares the bot only
+    closes dialogs (Escape) and re-clicks the card — reload-per-post is
+    exactly the robotic fingerprint we avoid.
 
-    A FlowError fails THIS share only; the run moves on. Every attempt (ok or
-    not) marks its (listing_id, group_id) pair done for this run.
+    Sleeps: ACTION category before each share; SHARE-GAP category
+    (AP_SHARE_GAP_*, 2-3s) BETWEEN consecutive shares, never after the
+    run's last one (is_last_listing marks it).
+
+    A FlowError fails THIS share only; every attempt marks its
+    (listing_id, group_id) pair done for this run.
     """
     lid = str(listing["id"])
-    todo = [g for g in plan if (lid, str(g["id"])) not in done]
-    if not todo:
-        return 0
 
-    # The description lives on the ITEM page: fetch it ONCE per listing BEFORE
-    # any dialog. Fetching it mid-loop (as the plan pseudocode sketched) would
-    # navigate away from the freshly-opened composer and destroy it.
+    # description: the item page, ONCE per listing, before any dialog.
     if lid not in desc_cache:
         try:
             desc_cache[lid] = await fl.fetch_listing_description(page, cfg, log,
@@ -188,27 +188,36 @@ async def run_listing(page, cfg: Config, recorder: RunRecorder, listing: dict,
         except (FlowError, PWError, TimeoutError, RuntimeError, OSError) as e:
             log(f"[share] {listing['title'][:40]!r}: description unavailable "
                 f"({e}) — skipping this listing")
-            for g in todo:
-                recorder.share_skipped(
-                    listing, g, f"listing description unavailable: {str(e)[:140]}")
-                done.add((lid, str(g["id"])))
+            recorder.share_skipped(listing, {"id": "-", "name": "(all)"},
+                                   f"listing description unavailable: {str(e)[:140]}")
             return 0
+
+    # from here on: exactly ONE navigation per listing, then pure dialogs.
+    await page.goto(SELLING_URL, wait_until="domcontentloaded", timeout=60000)
+
+    try:
+        picker = await fl.discover_share_groups(page, listing, cfg, log)
+    except (FlowError, PWError, TimeoutError, RuntimeError, OSError) as e:
+        log(f"[share] {listing['title'][:40]!r}: picker discovery failed ({e}) "
+            "— skipping this listing")
+        recorder.share_skipped(listing, {"id": "-", "name": "(all)"},
+                               f"picker discovery failed: {str(e)[:140]}")
+        return 0
+    write_targets_cache(listing, picker, log)
+    plan = filter_groups(picker, only_group)
+    todo = [g for g in plan if (lid, str(g["id"])) not in done]
+    if not todo:
+        return 0
 
     shared = 0
     for idx, g in enumerate(todo):
         await human_sleep(cfg, log, "before share",
                           cfg.crosspost_action_min, cfg.crosspost_action_max)
         try:
-            # a fresh selling page per share: dialog/X closes leave lazy state
-            # stale and re-navigating is what a human doing share 2 would do.
-            await page.goto(SELLING_URL, wait_until="domcontentloaded",
-                            timeout=60000)
-            picker = await _open_share_hub(page, listing, cfg, log,
-                                           lambda groups: write_targets_cache(
-                                               listing, groups, log))
-            if picker:
-                write_targets_cache(listing, picker, log)
-            ranked_g = ranked(g, picker)
+            await fl.dismiss_share_dialogs(page, cfg, log)
+            fresh = await _open_share_hub(page, listing, cfg, log,
+                                          lambda groups: None)
+            ranked_g = ranked(g, fresh or picker)
             await fl.pick_share_group(page, ranked_g, cfg, log)
             await fl.stage_or_publish_share(page, cfg, log, desc_cache[lid],
                                             ranked_g)
@@ -316,49 +325,43 @@ async def main_async(cfg: Config, args) -> int:
                 log(f"  {lst['id']:>26}  {lst['title'][:48]:<48} "
                     f"{lst['price']:>10}")
 
-            # ---- targets: the identity's JOINED groups, live ----
-            try:
-                groups = await fetch_joined_groups(page, av=cfg.identity_id,
-                                                   log=log)
-            except GroupsFetchError as e:
-                if not args.list:
-                    log(f"[share] abort: joined-groups fetch failed: {e}")
-                    finish(f"run aborted: joined-groups fetch failed ({e})")
-                    return 1
-                log(f"[share] joined-groups fetch failed ({e}) — --list "
-                    "continues without the group count")
-                groups = []
-            plan = filter_groups(groups, args.group)
-            log(f"[share] plan: {len(listings)} listing(s) x "
-                f"{len(plan)} group(s) = {len(listings) * len(plan)} share(s)"
-                f"{' (--group filter)' if args.group else ''}")
+            # ---- targets: THE PICKER per listing (never the joins page) ----
+            log(f"[share] plan: {len(listings)} listing(s); each listing's "
+                "groups come from its own 'Compartir -> Grupo' picker")
 
             if args.list:
+                for lst in listings:
+                    await page.goto(SELLING_URL, wait_until="domcontentloaded",
+                                    timeout=60000)
+                    try:
+                        picker = await fl.discover_share_groups(page, lst, cfg,
+                                                                log)
+                    except Exception as e:  # noqa: BLE001 — report, continue
+                        log(f"[share] {lst['title'][:40]!r}: picker failed ({e})")
+                        continue
+                    shown = filter_groups(picker, args.group)
+                    log(f"[share] {lst['title'][:44]!r}: picker offers "
+                        f"{len(shown)} group(s)")
+                    for g in shown:
+                        log(f"    {g['id']!s:>18}  {g['name'][:56]}")
+                    write_targets_cache(lst, picker, log)
                 cache = read_targets_cache()
                 if cache:
                     log(f"[share] last share_targets cache: "
                         f"{len(cache.get('targets') or [])} picker group(s) "
                         f"from listing {str(cache.get('listing_title'))[:40]!r} "
                         f"@ {cache.get('ts')}")
-                else:
-                    log("[share] share_targets cache: empty (no share run yet)")
-                log(f"[share] joined groups available: {len(groups)}")
-                log("--list: listings + caches only, NO dialog opened")
+                log("--list: enumerates the picker dialogs, shares NOTHING")
                 finish()
                 return 0
 
-            if not plan:
-                log("[share] abort: no joined groups to share into "
-                    "(or --group matched none)")
-                finish("run aborted: no joined groups to share into")
-                return 1
-
             # ---- the matrix: each share opens its own dialog ----
+
             desc_cache: dict = {}
             done: set = set()
             for i, lst in enumerate(listings):
-                await run_listing(page, cfg, recorder, lst, plan, log,
-                                  desc_cache, done,
+                await run_listing(page, cfg, recorder, lst, log, desc_cache,
+                                  done, only_group=args.group,
                                   is_last_listing=(i == len(listings) - 1))
 
             ok = sum(1 for r in recorder.share_results
@@ -377,8 +380,8 @@ async def main_async(cfg: Config, args) -> int:
 def _cli(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         prog="python -m poster.share",
-        description="Share each active MARKETPLACE listing into EACH joined "
-                    "group individually (listing -> Compartir -> Grupo -> "
+        description="Share each active MARKETPLACE listing into EACH group its "
+                    "picker offers, individually (listing -> Compartir -> Grupo -> "
                     "name search -> composer -> description): every listing x "
                     "every group = its own share, one dialog at a time. "
                     "Dry-run stages each composer then closes it — nothing is "
@@ -389,8 +392,8 @@ def _cli(argv: list[str] | None = None) -> argparse.Namespace:
                     help="confirm LIVE intent (still requires AP_DRY_RUN=false"
                          " in .env — the repo fail-safe)")
     ap.add_argument("--list", action="store_true",
-                    help="print the active listings + the last share_targets "
-                         "cache + the joined-group count, open NO dialog")
+                    help="print active listings and each picker's full group "
+                         "list (opens dialogs, shares nothing)")
     ap.add_argument("--listing", action="append", metavar="TERM",
                     help="only listings whose title contains TERM "
                          "(case-insensitive) or whose id equals TERM; "

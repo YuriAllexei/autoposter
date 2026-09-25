@@ -346,7 +346,7 @@ def test_manager_streams_child_output_into_the_buffer(tmp_path):
     assert started["pid"] == 4321 and started["live"] is False
     assert mgr.wait_idle(5) is True
     text = "\n".join(bufs.since(0)["lines"])
-    assert "starting group posting run (dry)" in text
+    assert "starting Entire Inventory Distribution run (dry)" in text
     assert "$ PY -m poster.main --dry-run" in text
     assert "[group] VENTAS" in text
     assert "finished (groups dry) rc=0" in text
@@ -1191,13 +1191,13 @@ def test_manager_spawns_a_dry_share_run(tmp_path):
     assert mgr.wait_idle(5) is True
     assert seen["cmd"] == ["PY", "-m", "poster.share", "--dry-run"]
     assert started["live"] is False and started["mode"] == "share"
-    assert "marketplace share run" in "\n".join(bufs.since(0)["lines"])
+    assert "Individual Listing Sequential Group Posting run" in "\n".join(bufs.since(0)["lines"])
 
 
 def test_page_has_share_button_stat_and_audit_card():
     html = render_page()
     assert 'id="b-dry-share"' in html
-    assert "Dry run · share" in html
+    assert "Dry run · Individual Listing Sequential Group Posting" in html
     assert 'run("share", false)' in html
     assert "share lines" in html
     assert "SHARE · LEDGER AUDIT" in html

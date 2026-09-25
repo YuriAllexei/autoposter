@@ -214,7 +214,6 @@ from types import SimpleNamespace
 
 from poster import share as sh
 from poster.flows import FlowError
-from poster.groups_fetch import GroupsFetchError
 from poster.results import STATUS_FAILED, STATUS_STAGED
 
 FEED = [{"id": "L1", "title": "Tahoe", "price": "$340.000"},
@@ -231,14 +230,24 @@ class FakeShare:
     poster.share.fl so this module never depends on Slice A's internals)."""
 
     def __init__(self, picker=None, fail_groups=(), fail_desc=False,
-                 fail_hub=False):
+                 fail_hub=False, fail_picker=False):
         self.picker = PICKER if picker is None else picker
         self.fail_groups = set(fail_groups)
-        self.fail_desc, self.fail_hub = fail_desc, fail_hub
+        self.fail_desc = fail_desc
+        self.fail_hub, self.fail_picker = fail_hub, fail_picker
         self.hubs: list[str] = []
         self.picks: list[tuple] = []
         self.staged: list[tuple] = []
         self.desc_calls: list[str] = []
+
+    async def discover(self, page, listing, cfg, log=print):
+        if getattr(self, "fail_picker", False):
+            from poster.flows import FlowError
+            raise FlowError("picker discovery exploded")
+        return [dict(g) for g in self.picker]
+
+    async def dismiss(self, page, cfg, log=print):
+        return None
 
     async def open_hub(self, page, listing, cfg, log=print):
         self.hubs.append(listing["id"])
@@ -271,6 +280,8 @@ def _install_share(monkeypatch, fake, sleeps, tmp_path):
     monkeypatch.setattr(sh.fl, "pick_share_group", fake.pick)
     monkeypatch.setattr(sh.fl, "stage_or_publish_share", fake.stage)
     monkeypatch.setattr(sh.fl, "fetch_listing_description", fake.desc)
+    monkeypatch.setattr(sh.fl, "discover_share_groups", fake.discover)
+    monkeypatch.setattr(sh.fl, "dismiss_share_dialogs", fake.dismiss)
     # never write the real .local-capture cache from a test
     monkeypatch.setattr(sh, "TARGETS_CACHE", tmp_path / "share_targets.json")
 
@@ -295,7 +306,7 @@ def test_run_listing_opens_a_fresh_dialog_per_share_in_plan_order(
     _install_share(monkeypatch, fake, sleeps, tmp_path)
     cfg = _cfg(tmp_path)
     rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
-    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), GROUPS,
+    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), 
                                    print, {}, set(), is_last_listing=True))
     assert n == 2
     assert fake.hubs == ["L1", "L1"]              # one dialog per share
@@ -310,7 +321,7 @@ def test_share_gap_between_shares_and_never_after_the_last(tmp_path, monkeypatch
     _install_share(monkeypatch, fake, sleeps, tmp_path)
     cfg = _cfg(tmp_path)                          # action 1-3s, gap 0-0.01s
     rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
-    asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), GROUPS, print,
+    asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), print,
                                {}, set(), is_last_listing=True))
     assert [s[0] for s in sleeps] == ["before share", "before next share",
                                       "before share"]
@@ -327,12 +338,12 @@ def test_gap_still_applies_between_listings(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
     done: set = set()
-    asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing("L1"), GROUPS[:1],
+    asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing("L1"), 
                                print, {}, done, is_last_listing=False))
     asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing("L3", "CR-V"),
-                               GROUPS[:1], print, {}, done, is_last_listing=True))
+                               print, {}, done, is_last_listing=True))
     gaps = [s for s in sleeps if s[0] == "before next share"]
-    assert len(gaps) == 1                         # only between the two shares
+    assert len(gaps) == 3      # L1:1+carry, L3:1; none after L3's last share
 
 
 def test_failed_share_marks_pair_done_and_never_retries_in_run(
@@ -342,12 +353,12 @@ def test_failed_share_marks_pair_done_and_never_retries_in_run(
     cfg = _cfg(tmp_path)
     rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
     done: set = set()
-    asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), GROUPS, print,
+    asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), print,
                                {}, done, is_last_listing=True))
     assert [r.status for r in rec.share_results] == [STATUS_FAILED, STATUS_STAGED]
     assert done == {("L1", "g1"), ("L1", "g2")}
     # a second pass over the SAME in-run done-set shares nothing again
-    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), GROUPS,
+    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), 
                                    print, {}, done, is_last_listing=True))
     assert n == 0 and len(fake.hubs) == 2
 
@@ -358,10 +369,10 @@ def test_description_failure_skips_the_listing_without_a_dialog(
     _install_share(monkeypatch, fake, sleeps, tmp_path)
     cfg = _cfg(tmp_path)
     rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
-    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), GROUPS,
+    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), 
                                    print, {}, set(), is_last_listing=True))
     assert n == 0 and fake.hubs == []
-    assert [r.status for r in rec.share_results] == ["skipped", "skipped"]
+    assert [r.status for r in rec.share_results] == ["skipped"]  # one, synthetic
 
 
 def test_share_pipeline_never_reads_the_ledger_for_decisions(
@@ -378,7 +389,7 @@ def test_share_pipeline_never_reads_the_ledger_for_decisions(
     _install_share(monkeypatch, fake, sleeps, tmp_path)
     cfg = _cfg(tmp_path, ledger_file=led)
     rec = RunRecorder(ledger_path=led, run_id="R2", dry_run=True)
-    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), GROUPS,
+    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), 
                                    print, {}, set(), is_last_listing=True))
     assert n == 2 and fake.hubs == ["L1", "L1"]
 
@@ -426,7 +437,7 @@ def test_pipeline_writes_the_targets_cache_from_the_hub(tmp_path, monkeypatch):
     _install_share(monkeypatch, fake, sleeps, tmp_path)
     cfg = _cfg(tmp_path)
     rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
-    asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), GROUPS[:1],
+    asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(), 
                                print, {}, set(), is_last_listing=True))
     assert sh.read_targets_cache()["targets"] == ["VENTAS CUAUHTEMOC",
                                                   "JUAREZ AUTOS"]
@@ -449,15 +460,9 @@ def _stub_entry(monkeypatch, feed=None, groups=None, state="ok"):
     async def fake_fetch(page, cfg, log=None, **kw):
         return list(FEED if feed is None else feed)
 
-    async def fake_groups(page, *, av, log=None, **kw):
-        if groups == "boom":
-            raise GroupsFetchError("joins fetch exploded")
-        return list(GROUPS if groups is None else groups)
-
     monkeypatch.setattr(sh, "launch", fake_launch)
     monkeypatch.setattr(sh, "adopt_identity", fake_adopt)
     monkeypatch.setattr(sh, "fetch_active_listings", fake_fetch)
-    monkeypatch.setattr(sh, "fetch_joined_groups", fake_groups)
     monkeypatch.setattr(sh, "send_summary", lambda *a, **k: True)
 
 
@@ -497,7 +502,7 @@ def test_main_async_group_restricts_the_plan(tmp_path, monkeypatch):
     assert rc == 0 and [p[0] for p in fake.picks] == ["g2", "g2"]
 
 
-def test_main_async_list_mode_opens_no_dialog(tmp_path, monkeypatch):
+def test_main_async_list_mode_enumerates_the_picker(tmp_path, monkeypatch):
     rc, fake, _, _ = _run_main_async(tmp_path, monkeypatch, list=True)
     assert rc == 0 and fake.hubs == [] and fake.staged == []
 
@@ -512,9 +517,17 @@ def test_main_async_unmatched_listing_term_rc1(tmp_path, monkeypatch):
     assert rc == 1 and fake.hubs == []
 
 
-def test_main_async_joined_groups_failure_rc1(tmp_path, monkeypatch):
-    rc, fake, _, _ = _run_main_async(tmp_path, monkeypatch, groups="boom")
-    assert rc == 1 and fake.hubs == []
+def test_main_async_picker_discovery_failure_rc1(tmp_path, monkeypatch):
+    """No joins page, no shares: a dead picker skips the listing with an
+    audit line and the run finishes rc1 (nothing staged)."""
+    fake = FakeShare(fail_picker=True)
+    rc, fake, cfg, _ = _run_main_async(tmp_path, monkeypatch, fake=fake)
+    assert rc == 1
+    assert fake.hubs == []
+    import json as _j
+    lines = [_j.loads(x) for x in cfg.ledger_file.read_text().splitlines()]
+    assert [l["status"] for l in lines] == ["skipped", "skipped"]  # one/listing
+    assert all("discovery" in l["error"] for l in lines)
 
 
 def test_main_async_group_filter_matching_none_rc1(tmp_path, monkeypatch):

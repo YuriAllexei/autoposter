@@ -212,9 +212,9 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
     </div>
     <div class="row" id="controls">
       <span class="btnset"><span class="lbl">test</span>
-        <button id="b-dry-groups">Dry run · groups</button>
-        <button id="b-dry-cross">Dry run · crosspost</button>
-        <button id="b-dry-share">Dry run · share</button>
+        <button id="b-dry-groups">Dry run · Entire Inventory Distribution</button>
+        <button id="b-dry-cross">Dry run · Initial Post Sharing</button>
+        <button id="b-dry-share">Dry run · Individual Listing Sequential Group Posting</button>
       </span>
       <span class="btnset"><span class="lbl">data</span>
         <button class="ghost" id="b-refresh-groups">Refresh groups</button>
@@ -223,8 +223,8 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
       <span class="btnset"><span class="lbl">live</span>
         <input type="text" id="confirm" placeholder="type PUBLICAR"
                autocomplete="off" spellcheck="false">
-        <button class="danger" id="b-live-groups">LIVE · groups</button>
-        <button class="danger" id="b-live-cross">LIVE · crosspost</button>
+        <button class="danger" id="b-live-groups">LIVE · Entire Inventory Distribution</button>
+        <button class="danger" id="b-live-cross">LIVE · Initial Post Sharing</button>
       </span>
       <span class="btnset">
         <button class="danger" id="b-kill" disabled>Kill run</button>
@@ -484,7 +484,7 @@ function renderState(st) {
     const cell = td(tr, row.last_status || "never");
     cell.className = "pill " + statusClass(row.last_status);
   }, sh.available ? "no shares recorded in the ledger yet"
-                  : "no share rows yet — Dry run · share to populate");
+                  : "no share rows yet — Dry run · Individual Listing Sequential Group Posting to populate");
   text($("sharesnote"),
     sh.available
       ? ((sh.rows || []).length + " listing(s) with share activity · " +
