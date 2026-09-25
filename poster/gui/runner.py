@@ -46,6 +46,8 @@ MODE_SPECS: dict[str, dict[str, Any]] = {
                "live_allowed": True, "label": "group posting run"},
     "crosspost": {"module": "poster.crosspost", "dry_flag": "--dry-run",
                   "live_allowed": True, "label": "marketplace crosspost run"},
+    "share": {"module": "poster.share", "dry_flag": "--dry-run",
+              "live_allowed": False, "label": "marketplace share run"},
     "groups-refresh": {"module": "poster.main", "dry_flag": "--list-groups",
                        "live_allowed": False, "label": "joined-groups refresh"},
     "listings-refresh": {"module": "poster.listings", "dry_flag": "",

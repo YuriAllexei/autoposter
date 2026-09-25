@@ -1049,3 +1049,158 @@ def test_page_has_clipboard_paste_affordances():
     assert "paste-target" in html and "ptbadge" in html
     assert "pasteAwareName" in html                # nameless screenshots renamed
     assert "paste target" in html.lower()          # the hint explains it
+
+
+# --------------------------------------------------------------------------
+# Slice C — the 'share' pipeline in the dashboard (ledger parser + wiring)
+# --------------------------------------------------------------------------
+
+def share_line(gid: str, ts: str, *, status: str = "staged",
+               run_id: str = "R4", listing: str = L1,
+               title: str = "2019 Chevrolet Tahoe LT", dry: bool = True,
+               error: str | None = None, name: str | None = None) -> dict:
+    """One poster.results.RunRecorder.share() ledger row (kind='share')."""
+    return {"kind": "share", "run_id": run_id, "ts": ts,
+            "listing_id": listing, "listing_title": title,
+            "group_id": gid, "group_name": name or ("Group " + gid),
+            "status": status, "error": error, "dry_run": dry}
+
+
+def test_parse_share_line_honours_the_explicit_kind():
+    """A share row carries BOTH group_id and listing_id; the explicit `kind`
+    must win over id-presence inference (same policy as poster.results)."""
+    line = parse_ledger_line(json.dumps(
+        share_line(G1, "2026-09-24T01:00:00+00:00")))
+    assert line is not None
+    assert line.kind == state_mod.KIND_SHARE
+    assert line.group_id == G1 and line.listing_id == L1
+    assert line.listing_title == "2019 Chevrolet Tahoe LT"
+
+
+def test_explicit_kind_beats_group_id_inference():
+    """The legacy contract (id presence) still applies when `kind` is absent,
+    but a stamped row is never re-interpreted."""
+    legacy = parse_ledger_line(json.dumps(
+        {"group_id": G1, "listing_id": L1, "status": "published"}))
+    assert legacy is not None and legacy.kind == state_mod.KIND_GROUP
+    stamped = parse_ledger_line(json.dumps(
+        {"kind": "group", "group_id": G1, "status": "staged"}))
+    assert stamped is not None and stamped.kind == state_mod.KIND_GROUP
+
+
+def test_share_rows_are_invisible_to_group_rollup_and_rotation(tmp_path):
+    """C0: a share row masquerading as a group attempt would poison the text
+    rotation clock and the Joined-groups table — it must not."""
+    write_groups_snapshot(tmp_path)
+    write_listings(tmp_path)
+    group_ts = "2026-09-19T00:36:49+00:00"
+    share_ts = "2026-09-24T09:00:00+00:00"   # LATER than the group attempt
+    write_ledger(tmp_path, [
+        group_line(G1, "VENTAS", "published", group_ts, dry=False),
+        share_line(G1, share_ts, status="staged"),
+    ])
+    lines = read_ledger(tmp_path / "results" / "ledger.jsonl")
+    roll = state_mod.group_rollup(lines)
+    assert roll[G1]["attempts"] == 1
+    assert roll[G1]["last_ts"] == group_ts          # share row did NOT move it
+    assert roll[G1]["last_status"] == "published"
+
+    st = build_state(GuiPaths.from_root(tmp_path), IDENTITY)
+    rows = {r["id"]: r for r in st["groups"]["rows"]}
+    assert rows[G1]["attempts"] == 1
+    assert rows[G1]["last_ts"] == group_ts
+    assert rows[G1]["last_status"] == "published"
+    # both G2 and G3 remain never-attempted for the text pipeline
+    assert sorted(st["rotation"]["never_attempted"]) == sorted([G2, G3])
+
+    assert st["ledger"]["share_lines"] == 1
+    assert st["ledger"]["group_lines"] == 1
+
+
+def test_share_audit_rows_group_by_listing_newest_first(tmp_path):
+    write_groups_snapshot(tmp_path)
+    write_listings(tmp_path)
+    L2 = "1000000000000002"
+    write_ledger(tmp_path, [
+        share_line(G1, "2026-09-24T01:00:00+00:00", status="staged"),
+        share_line(G1, "2026-09-24T01:00:10+00:00", status="staged",
+                   name="Group 1 again"),
+        share_line(G2, "2026-09-24T01:00:20+00:00", status="failed",
+                   error="ambiguous duplicate"),
+        share_line(G1, "2026-09-24T03:00:00+00:00", status="staged",
+                   listing=L2, title="2007 Nissan Xterra"),
+    ])
+    st = build_state(GuiPaths.from_root(tmp_path), IDENTITY)
+    assert st["ledger"]["share_lines"] == 4
+    rows = st["share"]["rows"]
+    assert [r["listing_id"] for r in rows] == [L2, L1]      # newest first
+    l1 = rows[1]
+    assert l1["title"] == "2019 Chevrolet Tahoe LT"
+    assert l1["groups"] == 2                                # distinct group_ids
+    assert l1["last_ts"] == "2026-09-24T01:00:20+00:00"
+    assert l1["last_status"] == "failed"
+    assert rows[0]["groups"] == 1 and rows[0]["last_status"] == "staged"
+    assert st["share"]["available"] is True
+
+
+def test_share_audit_is_empty_without_share_rows(tmp_path):
+    populated_root(tmp_path)                                # group + crosspost only
+    st = build_state(GuiPaths.from_root(tmp_path), IDENTITY)
+    assert st["ledger"]["share_lines"] == 0
+    assert st["share"]["rows"] == [] and st["share"]["available"] is False
+
+
+def test_share_mode_builds_dry_command_and_refuses_live():
+    assert build_command("share", False, "PY") == [
+        "PY", "-m", "poster.share", "--dry-run"]
+    with pytest.raises(runner_mod.RunRejected):
+        build_command("share", True, "PY")
+    assert MODE_SPECS["share"]["module"] == "poster.share"
+    assert MODE_SPECS["share"]["dry_flag"] == "--dry-run"
+    assert MODE_SPECS["share"]["live_allowed"] is False
+
+
+def test_manager_refuses_a_live_share_run(tmp_path):
+    mgr = RunManager(tmp_path, RingBuffer(), python="PY", probe=lambda m: True)
+    with pytest.raises(runner_mod.RunRejected):
+        mgr.start("share", live=True)
+
+
+def test_live_server_refuses_a_live_share_with_400(live_server):
+    """There is no live share variant: the request is well-formed but the
+    mode cannot publish — 400 with a reason, nothing spawned."""
+    base, manager, _buffer = live_server
+    status, data = _post(base + "/api/run", {"mode": "share", "live": True})
+    assert status == 400 and manager.status()["running"] is False
+    assert data["error"]
+
+
+def test_manager_spawns_a_dry_share_run(tmp_path):
+    """Dry share rides the SAME generic runner as crosspost: no live flag is
+    synthesised, the --dry-run flag reaches the child."""
+    seen: dict = {}
+
+    def spy_popen(cmd, **kw):
+        seen["cmd"] = cmd
+        return FakeProc(["[share] staged\n"])
+
+    bufs = RingBuffer()
+    mgr = RunManager(tmp_path, bufs, python="PY", probe=lambda m: True,
+                     popen=spy_popen)
+    started = mgr.start("share", live=False)
+    assert mgr.wait_idle(5) is True
+    assert seen["cmd"] == ["PY", "-m", "poster.share", "--dry-run"]
+    assert started["live"] is False and started["mode"] == "share"
+    assert "marketplace share run" in "\n".join(bufs.since(0)["lines"])
+
+
+def test_page_has_share_button_stat_and_audit_card():
+    html = render_page()
+    assert 'id="b-dry-share"' in html
+    assert "Dry run · share" in html
+    assert 'run("share", false)' in html
+    assert "share lines" in html
+    assert "SHARE · LEDGER AUDIT" in html
+    assert 'id="shares"' in html and '"shares"' in html    # card table + render
+    # the audit card must NOT masquerade as a third live? column
+    assert html.count("<th>live?</th>") == 2

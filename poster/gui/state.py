@@ -42,13 +42,17 @@ from ..results import (
     STATUS_FAILED,
     STATUS_SKIPPED,
     last_attempt_ts,
+    record_kind,
     select_targets,
 )
 
 # Ledger record kinds. `unknown` keeps forward compatibility: a future schema
-# shows up in counts without crashing the dashboard.
+# shows up in counts without crashing the dashboard. The kind is read from the
+# row's explicit `kind` field when present (poster.results writes one on every
+# row); rows written before that field existed are inferred from their ids.
 KIND_GROUP = "group"
 KIND_CROSSPOST = "crosspost"
+KIND_SHARE = "share"
 KIND_UNKNOWN = "unknown"
 
 RECENT_LEDGER_LIMIT = 50
@@ -175,10 +179,16 @@ class LedgerLine:
 def parse_ledger_line(raw: str) -> LedgerLine | None:
     """Tolerant single-line parse; None for blank/corrupt/non-object lines.
 
-    A record is group-posting when it carries `group_id` (checked FIRST —
-    that is the ordering the ledger contract states), otherwise a crosspost
-    when it carries `listing_id`; neither means `unknown`, which is counted
-    but never interpreted.
+    The row's OWN `kind` field is authoritative (poster.results stamps one on
+    every line). Only when it is absent — rows written before the field
+    existed — is the kind inferred from ids: `group_id` (checked FIRST, the
+    ordering the original contract states) means a group-posting attempt,
+    otherwise `listing_id` means a crosspost; neither means `unknown`, which
+    is counted but never interpreted.
+
+    This matters because a SHARE row carries BOTH `group_id` and `listing_id`;
+    inferring from ids would file it as a text-group attempt and let it push
+    the Joined-groups rotation clock (the C0 bug).
     """
     if not raw or not raw.strip():
         return None
@@ -188,14 +198,9 @@ def parse_ledger_line(raw: str) -> LedgerLine | None:
         return None
     if not isinstance(rec, dict):
         return None
+    kind = record_kind(rec)
     group_id = _as_str(rec.get("group_id")).strip()
     listing_id = _as_str(rec.get("listing_id")).strip()
-    if group_id:
-        kind = KIND_GROUP
-    elif listing_id:
-        kind = KIND_CROSSPOST
-    else:
-        kind = KIND_UNKNOWN
     dry = rec.get("dry_run")
     return LedgerLine(
         kind=kind,
@@ -398,6 +403,47 @@ def crosspost_rollup(lines: list[LedgerLine]) -> dict[str, dict[str, Any]]:
     return by_listing
 
 
+def share_rollup(lines: list[LedgerLine]) -> dict[str, dict[str, Any]]:
+    """Per-listing_id share coverage from individual share rows.
+
+    SHARE rows only: each row is ONE listing→group share, unlike a crosspost
+    row which is a whole batch. The set of DISTINCT group_ids is what the
+    audit card shows as "groups shared to" (a group re-shared in a later run
+    must not inflate the count).
+    """
+    by_listing: dict[str, dict[str, Any]] = {}
+    for line in lines:
+        if line.kind != KIND_SHARE:
+            continue
+        row = by_listing.setdefault(line.listing_id, {
+            "listing_id": line.listing_id, "listing_title": line.listing_title,
+            "groups": [], "last_ts": "", "last_status": "", "last_error": None,
+        })
+        if line.group_id and line.group_id not in row["groups"]:
+            row["groups"].append(line.group_id)
+        if line.ts >= row["last_ts"]:
+            row["last_ts"] = line.ts
+            row["last_status"] = line.status
+            row["last_error"] = line.error
+            if line.listing_title:
+                row["listing_title"] = line.listing_title
+    return by_listing
+
+
+def share_audit(rollup: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """The read-only SHARE audit card rows: per listing, how many distinct
+    groups were shared to, the newest share's ts and status; newest first."""
+    rows = [{
+        "title": r["listing_title"] or r["listing_id"],
+        "listing_id": r["listing_id"],
+        "groups": len(r["groups"]),
+        "last_ts": r["last_ts"],
+        "last_status": r["last_status"],
+    } for r in rollup.values()]
+    rows.sort(key=lambda r: r["last_ts"], reverse=True)
+    return rows
+
+
 def _run_summaries(lines: list[LedgerLine]) -> list[dict[str, Any]]:
     """Recent runs, newest first: one row per run_id with its status mix."""
     runs: dict[str, dict[str, Any]] = {}
@@ -464,6 +510,7 @@ def build_state(paths: GuiPaths, identity: dict[str, Any] | None = None,
     last = last_attempt_ts(paths.ledger)
     by_group = group_rollup(lines)
     by_listing = crosspost_rollup(lines)
+    by_share = share_rollup(lines)
     # published totals are derived from group-kind lines, NOT from
     # poster.results.count_published: that helper is the group-only reader and
     # would count a published crosspost line as a phantom "unknown" group,
@@ -512,10 +559,13 @@ def build_state(paths: GuiPaths, identity: dict[str, Any] | None = None,
         "groups": groups,
         "listings": listings,
         "rotation": rotation,
+        "share": {"available": bool(by_share),
+                  "rows": share_audit(by_share)},
         "ledger": {
             "available": ledger_exists, "lines": len(lines),
             "group_lines": sum(1 for x in lines if x.kind == KIND_GROUP),
             "crosspost_lines": sum(1 for x in lines if x.kind == KIND_CROSSPOST),
+            "share_lines": sum(1 for x in lines if x.kind == KIND_SHARE),
             "unknown_lines": sum(1 for x in lines if x.kind == KIND_UNKNOWN),
             "status_counts": status_counts(lines),
             "published_total": sum(r["published"] for r in by_group.values()),

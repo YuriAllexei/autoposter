@@ -25,6 +25,7 @@ from . import state as state_mod
 from .content import ContentError
 from .page import render_page
 from .runner import (
+    MODE_SPECS,
     RingBuffer,
     RunBusy,
     RunManager,
@@ -197,14 +198,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json(out)
 
     def _run(self, payload: dict[str, Any]) -> None:
+        mode = str(payload.get("mode") or "")
+        live = bool(payload.get("live"))
+        spec = MODE_SPECS.get(mode)
+        if live and spec is not None and not spec["live_allowed"]:
+            # No live variant of this mode exists (e.g. 'share'). Reject with
+            # 400 BEFORE the confirmation gate so the operator gets the real
+            # reason instead of a prompt to type PUBLICAR for a run that can
+            # never publish.
+            self._send_json(
+                {"error": f"mode {mode!r} has no live variant "
+                          f"({spec['label']} is dry-run only)", "mode": mode},
+                HTTPStatus.BAD_REQUEST)
+            return
         reason = live_confirmation_error(payload)
         if reason is not None:
             # 403 rather than 400: the request was well-formed but is not
             # allowed to publish without the typed confirmation phrase.
             self._send_json({"error": reason}, HTTPStatus.FORBIDDEN)
             return
-        mode = str(payload.get("mode") or "")
-        self._spawn(mode, live=bool(payload.get("live")))
+        self._spawn(mode, live=live)
 
     def _spawn(self, mode: str, live: bool) -> None:
         try:

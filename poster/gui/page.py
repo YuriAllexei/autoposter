@@ -214,6 +214,7 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
       <span class="btnset"><span class="lbl">test</span>
         <button id="b-dry-groups">Dry run · groups</button>
         <button id="b-dry-cross">Dry run · crosspost</button>
+        <button id="b-dry-share">Dry run · share</button>
       </span>
       <span class="btnset"><span class="lbl">data</span>
         <button class="ghost" id="b-refresh-groups">Refresh groups</button>
@@ -318,6 +319,16 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
   </div>
 
   <div class="card span2">
+    <h2>SHARE · LEDGER AUDIT</h2>
+    <div class="tablewrap"><table id="shares">
+      <thead><tr><th>id</th><th>title</th><th class="num">groups</th>
+        <th>last</th><th>status</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="note" id="sharesnote"></div>
+  </div>
+
+  <div class="card span2">
     <h2>Live output</h2>
     <div class="row" style="margin:0 0 10px">
       <label><input type="checkbox" id="autoscroll" checked> autoscroll</label>
@@ -417,6 +428,7 @@ function renderState(st) {
   stats.appendChild(statBox(sc.staged || 0, "staged (dry)"));
   stats.appendChild(statBox((sc.failed || 0) + (sc.skipped || 0), "failed+skipped"));
   stats.appendChild(statBox(led.crosspost_lines || 0, "crosspost lines"));
+  stats.appendChild(statBox(led.share_lines || 0, "share lines"));
   stats.appendChild(statBox(led.lines || 0, "ledger lines"));
   stats.appendChild(statBox(rot.planned ? rot.planned.length : 0, "next run targets"));
 
@@ -462,6 +474,23 @@ function renderState(st) {
     l.available ? ("snapshot " + fmtTs(l.fetched_at) + " · " + l.count + " active listings")
                 : "not fetched yet — press Refresh listings to fetch it");
 
+  // share audit card: read-only per-listing share coverage from the ledger
+  const sh = st.share || {};
+  fillTable("shares", sh.rows || [], (row, tr) => {
+    td(tr, row.listing_id, "mono");
+    td(tr, row.title);
+    td(tr, row.groups, "num");
+    td(tr, fmtTs(row.last_ts), "mono");
+    const cell = td(tr, row.last_status || "never");
+    cell.className = "pill " + statusClass(row.last_status);
+  }, sh.available ? "no shares recorded in the ledger yet"
+                  : "no share rows yet — Dry run · share to populate");
+  text($("sharesnote"),
+    sh.available
+      ? ((sh.rows || []).length + " listing(s) with share activity · " +
+         (led.share_lines || 0) + " share line(s) total")
+      : "one row per listing: distinct groups shared to, last share time, last status");
+
   // runs table
   fillTable("runs", (st.runs || {}).recent || [], (row, tr) => {
     td(tr, row.run_id, "mono");
@@ -503,13 +532,17 @@ function renderButtons(st) {
   const m = st.manager || {};
   const avail = (st.modes || {});
   busy = !!m.running;
-  ["b-dry-groups", "b-dry-cross", "b-live-groups", "b-live-cross",
+  ["b-dry-groups", "b-dry-cross", "b-dry-share", "b-live-groups", "b-live-cross",
    "b-refresh-groups"].forEach((id) => { $(id).disabled = busy; });
   if (avail.crosspost === false) {
     $("b-dry-cross").disabled = true;
     $("b-dry-cross").title = "poster.crosspost is not on this checkout";
     $("b-live-cross").disabled = true;
     $("b-live-cross").title = "poster.crosspost is not on this checkout";
+  }
+  if (avail.share === false) {
+    $("b-dry-share").disabled = true;
+    $("b-dry-share").title = "poster.share is not on this checkout";
   }
   $("b-refresh-listings").disabled = avail["listings-refresh"] !== true;
   $("b-kill").disabled = !busy;
@@ -556,6 +589,7 @@ function run(mode, live) {
 
 $("b-dry-groups").onclick = () => run("groups", false);
 $("b-dry-cross").onclick = () => run("crosspost", false);
+$("b-dry-share").onclick = () => run("share", false);
 $("b-live-groups").onclick = () => run("groups", true);
 $("b-live-cross").onclick = () => run("crosspost", true);
 $("b-refresh-groups").onclick = () => {
