@@ -17,18 +17,10 @@ Repo rules obeyed by every flow:
     _wait_upload_settled, not by a timer
   - post text inserted 1:1 with READ-BACK verification (rule 1): pasted at
     paste-speed (document.execCommand('insertText') per line + Enter between
-    lines, so newlines survive) instead of char-by-char keyboard.type — then
-    read back, with ONE keyboard.type fallback; a second mismatch = FlowError
-  - photos attached via the composer's hidden input[type=file] (proven in
-    recording 20260917T063422Z: `input.x1s85apg` logged `C:\\fakepath\\car.jpg`)
-    — Playwright set_input_files answers it in-process; the OS dialog is
-    never opened. FileChooser-click is the fallback. One batch per car
-    folder, cars in sorted order => attachment order == post.txt car order
-  - DRY RUN stops before Publicar and saves evidence instead
-
-Selector provenance: recording 20260917T063422Z (group 249803862915566) +
-the 2026-09-17 recording sessions (topmost-trigger stamp, dialog-scoped actions, stale
-draft clear, keyboard.type). Match by text/aria/role, never obfuscated classes.
+    lines, so newlines survive) - the text is NEVER typed char-by-char
+    (typing fingerprint, user rule 2026-09-25); a retry CLEARS via the paste
+    API first (_clear_editor, verified empty), never by keyboard chords.
+    Match by text/aria/role, never obfuscated classes.
 """
 from __future__ import annotations
 
@@ -107,35 +99,65 @@ async def human_sleep(cfg: Config, log: log_fn, why: str = "",
     await asyncio.sleep(s)
 
 
-async def _ensure_text_1to1(page: Page, box, text: str, cfg: Config, log: log_fn) -> None:
-    """Content fidelity gate (rule 3), paste-speed path.
+async def _clear_editor(page: Page, box, cfg: Config, log: log_fn,
+                        what: str) -> None:
+    """Paste-API clear: execCommand('selectAll') + execCommand('delete').
 
-    `document.execCommand('insertText', false, line)` is a paste-like insertion
-    that fires the input events FB's React composer listens to (same as a real
-    Ctrl+V); an Enter keypress per line break keeps newlines 1:1. That is
-    orders of magnitude faster than keyboard.type on a long post. The READ-BACK
-    comparison below is still the hard gate: whatever path put the text in, if
-    inner_text() doesn't match we fall back ONCE to char-by-char typing (whole
-    post, human jitter) and re-read; still mismatched = FlowError, we never
-    publish text that failed read-back.
+    NEVER a keyboard clear chord. When FB's Lexical composer ignores Ctrl+A
+    (focus/timing), the following Delete removes nothing and the next paste
+    APPENDS - that is the double-written description of 2026-09-25. The API
+    acts on the selection directly, and we PROVE emptiness via a direct DOM
+    read (not inner_text, which FB may decorate) before letting anyone paste
+    into it. Three attempts; a box that refuses to clear aborts the share.
+    """
+    for attempt in (1, 2, 3):
+        await box.click()
+        await page.evaluate("() => document.execCommand('selectAll')")
+        await page.evaluate("() => document.execCommand('delete')")
+        await page.wait_for_timeout(300)
+        left = await box.evaluate(
+            "el => ((el.innerText || el.textContent || '') + '').trim().length")
+        if not left:
+            return
+        log(f"{what} still holds {left} chars after clear "
+            f"(attempt {attempt}/3)")
+    shot = await dump_evidence(page, cfg.screenshot_dir, "clear_refused")
+    raise FlowError(f"{what} would not clear - refusing to risk appending "
+                    f"onto stale text. Evidence: {shot}")
+
+
+async def _ensure_text_1to1(page: Page, box, text: str, cfg: Config, log: log_fn) -> None:
+    """Content fidelity gate (rule 3), PASTE-ONLY path.
+
+    `document.execCommand('insertText', false, line)` is a paste-like
+    insertion that fires the input events FB's React composer listens to
+    (same as a real Ctrl+V); an Enter keypress per line break keeps newlines
+    1:1. NOTHING HERE IS EVER TYPED char-by-char (bot-typing fingerprint,
+    user rule 2026-09-25): on a read-back mismatch the box is CLEARED via the
+    paste API (_clear_editor, verified empty) and the whole text is re-pasted
+    ONCE; a second mismatch aborts with a screenshot. Text that failed the
+    read-back is never left in the composer for any publish to follow.
     """
     def ok(got: str, want: str) -> bool:
         if got == want:
             return True
         # FB auto-inserts spaces around linkified text (URL glued to emoji
         # grew 2 chars per line on the 2026-09-25 share ladder); whitespace
-        # is the ONLY concession — every content char stays strict.
+        # is the ONLY concession - every content char stays strict.
         ws = lambda x: re.sub(r"\s+", " ", x).strip()
         return ws(got) == ws(want)
     await box.click()
+    #: FB keeps the draft of a composer we Escape-closed last share — pasting
+    #: into it APPENDS (the visible double-written description, 2026-09-25).
+    #: Clear stale content up front so attempt 1 starts from empty.
+    if await box.evaluate(
+            "el => ((el.innerText || el.textContent || '') + '').trim().length"):
+        log("stale draft in composer - clearing before paste")
+        await _clear_editor(page, box, cfg, log, "stale draft in composer")
     for attempt in (1, 2):
         if attempt == 2:
-            # CLEAR FIRST (share-ladder lesson): retyping appended to the
-            # failed paste (339 + 349 -> 723) and made retry impossible.
-            await box.click()
-            await page.keyboard.press("Control+a")
-            await page.keyboard.press("Backspace")
-            await page.wait_for_timeout(300)
+            # verified-empty clear first; NEVER retype over what is there
+            await _clear_editor(page, box, cfg, log, "composer")
         lines = text.split("\n")
         for i, line in enumerate(lines):
             if i:
@@ -151,11 +173,11 @@ async def _ensure_text_1to1(page: Page, box, text: str, cfg: Config, log: log_fn
             return
         if attempt == 1:
             log(f"paste read-back mismatch ({len(got)} chars vs "
-                f"{len(text)}) — clearing and re-pasting once")
+                f"{len(text)}) - clearing and re-pasting once")
     shot = await dump_evidence(page, cfg.screenshot_dir,
                                "share_text_mismatch")
     raise FlowError(
-        f"composer text mismatch after paste+retry — refusing to "
+        f"composer text mismatch after paste+retry - refusing to "
         f"continue. Evidence: {shot}")
 
 
@@ -301,10 +323,7 @@ async def group_composer_es_v1(
     existing = (await box.inner_text()).strip()
     if existing:
         log(f"NOTE: dialog had stale draft {existing[:60]!r} — clearing")
-        await box.click()
-        await page.keyboard.press("Control+A")
-        await page.keyboard.press("Delete")
-        await page.wait_for_timeout(500)
+        await _clear_editor(page, box, cfg, log, "draft box")
 
     # 4) text 1:1 with read-back gate
     await _ensure_text_1to1(page, box, post.text, cfg, log)
@@ -1153,9 +1172,7 @@ async def _fill_share_search(page: Page, name: str, cfg: Config,
                                    "share_no_search_box")
         raise FlowError(f"'{SHARE_SEARCH_PLACEHOLDER}' input never appeared. "
                         f"Evidence: {shot}") from e
-    await box.click()
-    await page.keyboard.press("Control+A")
-    await page.keyboard.press("Delete")
+    await _clear_editor(page, box, cfg, log, "search box")
     await page.evaluate("(t) => document.execCommand('insertText', false, t)",
                         name)
     log(f"share: searched {name[:44]!r} in '{SHARE_SEARCH_PLACEHOLDER}'")

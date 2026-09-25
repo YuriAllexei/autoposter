@@ -35,8 +35,9 @@ from poster.photos import CarPhotos
 class Composer:
     """The contenteditable's content, built by whichever path is used."""
 
-    def __init__(self, read_overrides=()):
+    def __init__(self, read_overrides=(), stubborn=False):
         self.content = ""
+        self.stubborn = stubborn   # True: execCommand delete won't clear
         self.read_overrides = list(read_overrides)
         self.reads = 0
         self.clicks = 0
@@ -61,6 +62,10 @@ class FakeBox:
 
     async def inner_text(self):
         return self.composer.read()
+
+    async def evaluate(self, expr, *a):
+        # _clear_editor's verified-empty probe
+        return len(self.composer.content.strip())
 
     async def count(self):
         return 1
@@ -131,6 +136,10 @@ class FakeLocator:
     async def is_visible(self):
         return True
 
+    async def evaluate(self, expr, *a):
+        # gate pre-clear probe: DOM length of the editor
+        return len(self.page.composer.content.strip())
+
     async def wait_for(self, **kw):
         return None
 
@@ -168,6 +177,8 @@ class FakePage:
         self.evaluate_calls.append((expr, arg))
         if "insertText" in expr:
             self.composer.content += arg
+        elif "execCommand('delete')" in expr and not self.composer.stubborn:
+            self.composer.content = ""
 
     async def wait_for_timeout(self, ms):
         self.timeouts.append(ms)
@@ -254,10 +265,32 @@ def test_readback_mismatch_clears_and_repastes_once_then_succeeds():
     asyncio.run(_ensure_text_1to1(page, page.box, text, _cfg(), logs.append))
 
     assert page.keyboard.types == []                    # char-by-char gone
-    assert "Control+a" in page.keyboard.presses         # clear ran
+    exprs = [e for e, _ in page.evaluate_calls]
+    assert any("selectAll" in e for e in exprs)         # clear via PASTE API
+    assert any("execCommand('delete')" in e for e in exprs)
+    assert "Control+a" not in page.keyboard.presses     # chords banned
+    assert "Control+A" not in page.keyboard.presses
     assert page.composer.content == text                # rebuilt by re-paste
     assert page.composer.reads == 2                     # re-read after retry
     assert any("clearing and re-pasting" in m for m in logs)
+
+
+def test_stale_draft_is_cleared_before_the_first_paste():
+    """FB keeps the draft of a composer we Escape-closed last share; pasting
+    into it APPENDS — the visible double-written description of 2026-09-25.
+    The gate must clear stale content BEFORE attempt 1, so attempt 1 lands
+    exact and no doubled text ever exists on screen."""
+    comp = Composer()
+    comp.content = "🚙 leftover draft from the previous share"
+    page = FakePage(comp)
+    text = "uno\ndos"
+    logs = []
+    asyncio.run(_ensure_text_1to1(page, page.box, text, _cfg(), logs.append))
+    exprs = [e for e, _ in page.evaluate_calls]
+    assert any("selectAll" in e for e in exprs)       # pre-clear ran
+    assert page.composer.content == text              # NOT draft + text
+    assert page.composer.reads == 1                   # passed first try
+    assert any("stale draft" in m for m in logs)
 
 
 # ---- (d) double mismatch is a hard stop ---------------------------------------
@@ -308,3 +341,13 @@ def test_dry_run_still_sleeps_before_publish(monkeypatch, tmp_path):
     assert len(calls) == 1                   # exactly the pre-PUBLISH sleep
     assert "PUBLISH" in calls[0] or "DRY" in calls[0]
     assert _insert_args(page) == ["uno", "dos"]   # paste drove the real flow too
+
+def test_clear_refusal_aborts_before_any_append():
+    """A box whose delete does nothing must FAIL, never risk a double write."""
+    page = FakePage(Composer(read_overrides=["basura"], stubborn=True))
+    with pytest.raises(FlowError, match="would not clear"):
+        asyncio.run(_ensure_text_1to1(page, page.box, "uno\ndos",
+                                      _cfg(), lambda *_: None))
+    exprs = [e for e, _ in page.evaluate_calls]
+    assert sum("execCommand('delete')" in e for e in exprs) == 3
+    assert "Control+A" not in page.keyboard.presses     # chords banned
