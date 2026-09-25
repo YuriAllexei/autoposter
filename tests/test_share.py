@@ -573,7 +573,8 @@ def test_cli_flags_and_defaults():
     assert (a.max, a.group, a.list, a.listing, a.dry_run, a.live) == \
         (0, None, False, None, False, False)
     b = sh._cli(["--list", "--listing", "TAHOE", "--max", "3", "--group", "g1"])
-    assert (b.list, b.listing, b.max, b.group) == (True, ["TAHOE"], 3, "g1")
+    assert (b.list, b.listing, b.max, b.group) == (True, ["TAHOE"], 3,
+                                                   ["g1"])
 
 
 def test_cli_live_refused_without_env_authorisation(tmp_path, capsys):
@@ -601,3 +602,15 @@ def test_cli_dry_flag_never_launches_a_browser(tmp_path, monkeypatch):
     monkeypatch.setattr(sh, "main_async", spy)
     assert sh.main(["--dry-run", "--env-file", str(env)]) == 1
     assert seen == [True]
+
+
+def test_filter_groups_accepts_a_repeated_flag_list():
+    picked = sh.filter_groups(GROUPS, ["g2", "VENTAS CUAUHTEMOC"])
+    assert [g["id"] for g in picked] == ["g1", "g2"]     # joined order kept
+    assert sh.filter_groups(GROUPS, ["nope"]) == []
+    assert len(sh.filter_groups(GROUPS, [])) == len(GROUPS)
+
+
+def test_cli_group_flag_accumulates():
+    ns = sh._cli(["--dry-run", "--group", "a", "--group", "b"])
+    assert ns.group == ["a", "b"]

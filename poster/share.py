@@ -87,13 +87,17 @@ def filter_listings(listings: list[dict], terms) -> list[dict]:
     return out
 
 
-def filter_groups(groups: list, only: str | None) -> list[dict]:
-    """--group ID restricts the plan to that single joined group (its exact
-    id, or its full name). No filter -> every joined group."""
+def filter_groups(groups: list, only) -> list[dict]:
+    """--group ID(s) restrict the plan to exactly those joined groups (each
+    by exact id or exact full name). Repeatable: 3 listings x 2 picked
+    groups = 6 shares. No filter -> every joined group."""
     if not only:
         return list(groups)
+    wanted = only if isinstance(only, (list, tuple, set)) else [only]
+    ids = {str(w).strip() for w in wanted}
+    names = {_fold(w) for w in wanted}
     return [g for g in groups
-            if str(g.get("id")) == str(only) or _fold(g.get("name")) == _fold(only)]
+            if str(g.get("id")) in ids or _fold(g.get("name")) in names]
 
 
 def ranked(group: dict, picker: list | None) -> dict:
@@ -394,9 +398,9 @@ def _cli(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--max", type=int, default=0,
                     help="max LISTINGS this run (0 = no cap: every active "
                          "listing x every targeted group)")
-    ap.add_argument("--group", default=None, metavar="ID",
-                    help="restrict the plan to ONE joined group (exact id or "
-                         "exact name)")
+    ap.add_argument("--group", action="append", default=None, metavar="ID",
+                    help="restrict the plan to this joined group (exact id "
+                         "or exact name); repeatable for a mini-matrix")
     ap.add_argument("--env-file", default=None,
                     help="alternate .env path (or set AP_ENV_FILE)")
     return ap.parse_args(argv)
