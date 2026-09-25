@@ -300,6 +300,45 @@ class FakePage:
         self.gotos.append(url)
 
 
+def test_run_listing_logs_the_numbered_plan_before_the_first_share(
+        tmp_path, monkeypatch):
+    """User 2026-09-25: the run must print EXACTLY which groups it is about
+    to post to — numbered, per listing, before any share fires — so the list
+    can be eyeballed (Kill run aborts)."""
+    fake, sleeps = FakeShare(), []
+    _install_share(monkeypatch, fake, sleeps, tmp_path)
+    cfg = _cfg(tmp_path)
+    rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
+    logs: list[str] = []
+    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(),
+                                   logs.append, {}, set(),
+                                   is_last_listing=True))
+    assert n == 2
+    header = next(i for i, m in enumerate(logs) if "PLAN for 'Tahoe'" in m)
+    assert f"{len(fake.picker)} group(s)" in logs[header]
+    for i, p in enumerate(fake.picker, 1):
+        line = logs[header + i]
+        assert f"{i:>2}." in line and str(p["name"]) in line
+    assert not any("-> " in m for m in logs[:header])   # nothing shared yet
+
+
+def test_plan_log_lists_only_the_remaining_todo_groups(tmp_path, monkeypatch):
+    """--group filtering and the in-run done-set both shrink the printed
+    plan: what you read is exactly what gets posted."""
+    fake, sleeps = FakeShare(), []
+    _install_share(monkeypatch, fake, sleeps, tmp_path)
+    cfg = _cfg(tmp_path)
+    rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
+    logs: list[str] = []
+    done = {("L1", str(fake.picker[0]["id"]))}          # first already done
+    asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(),
+                               logs.append, {}, done, is_last_listing=True))
+    header = next(i for i, m in enumerate(logs) if "PLAN for 'Tahoe'" in m)
+    assert "1 group(s)" in logs[header]
+    assert str(fake.picker[1]["name"]) in logs[header + 1]
+    assert str(fake.picker[0]["name"]) not in "".join(logs[header:])
+
+
 def test_run_listing_opens_a_fresh_dialog_per_share_in_plan_order(
         tmp_path, monkeypatch):
     fake, sleeps = FakeShare(), []

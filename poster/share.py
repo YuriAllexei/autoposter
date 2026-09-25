@@ -172,7 +172,7 @@ async def run_listing(page, cfg: Config, recorder: RunRecorder, listing: dict,
     exactly the robotic fingerprint we avoid.
 
     Sleeps: ACTION category before each share; SHARE-GAP category
-    (AP_SHARE_GAP_*, 2-3s) BETWEEN consecutive shares, never after the
+    (AP_SHARE_GAP_*, 10-15s) BETWEEN consecutive shares, never after the
     run's last one (is_last_listing marks it).
 
     A FlowError fails THIS share only; every attempt marks its
@@ -208,6 +208,14 @@ async def run_listing(page, cfg: Config, recorder: RunRecorder, listing: dict,
     todo = [g for g in plan if (lid, str(g["id"])) not in done]
     if not todo:
         return 0
+
+    #: The review list (user 2026-09-25): print EXACTLY who is about to get
+    #: this listing, numbered, before the first share — terminal and the
+    #: dashboard log both show it; Kill run is the abort if it looks wrong.
+    log(f"[share] PLAN for {listing['title'][:40]!r} - {len(todo)} group(s), "
+        "about to post to:")
+    for i, g in enumerate(todo, 1):
+        log(f"[share]   {i:>2}. {g['name']}")
 
     shared = 0
     for idx, g in enumerate(todo):
