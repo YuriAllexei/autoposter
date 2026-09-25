@@ -29,6 +29,14 @@ OP = fl.XPOST_GROUPS_OP
 MUT = fl.XPOST_MUTATION_OP
 
 
+@pytest.fixture(autouse=True)
+def _fast_step_timeout(monkeypatch):
+    """Poll loops use the real 30 s budget; tests keep it tiny (fakes are
+    instant so a stale spin would otherwise burn 30 s wall-clock)."""
+    monkeypatch.setattr(fl, "SHARE_STEP_TIMEOUT_MS", 60)
+    monkeypatch.setattr(fl, "SHARE_SETTLE_POLL_MS", 1)
+
+
 def _cfg(tmp_path, **kw) -> Config:
     base = {"dry_run": True, "headless": True,
             "screenshot_dir": tmp_path / "shots",
@@ -463,3 +471,47 @@ def test_link_preview_never_settles_raises_with_evidence(monkeypatch,
         asyncio.run(stage_or_publish_share(page, _cfg(tmp_path),
                                            lambda *_a: None, DESC, {"name": "G"}))
     assert tags == ["crossshare_preview_stuck"]
+
+
+# ---- hydration polling in the stamp finders (dry-ladder lesson 2026-09-25) ----
+
+async def _fake_evidence(page, dir, tag, **_kw):
+    return f"{tag}.png"
+
+
+def test_share_button_polls_skeleton_until_card_hydrates(tmp_path, monkeypatch):
+    monkeypatch.setattr(fl, "dump_evidence", _fake_evidence)
+    page = FakePage(js={fl._STAMP_SHARE_BTN_JS:
+                        ["no-card", "none-in-card", "ok"]})
+    btn = asyncio.run(fl._find_share_button(page, "T", _cfg(tmp_path),
+                                            lambda *a: None))
+    assert btn.sel == '[data-ap-share="1"]'
+    assert sum(1 for e, _ in page.evals if e == fl._STAMP_SHARE_BTN_JS) == 3
+
+
+def test_share_button_gives_up_with_reason_after_deadline(tmp_path, monkeypatch):
+    monkeypatch.setattr(fl, "dump_evidence", _fake_evidence)
+    page = FakePage(js={fl._STAMP_SHARE_BTN_JS: "no-card"})
+    with pytest.raises(FlowError) as exc:
+        asyncio.run(fl._find_share_button(page, "T", _cfg(tmp_path),
+                                          lambda *a: None))
+    assert "no-card" in str(exc.value)
+    assert "hydration" in str(exc.value)
+
+
+def test_share_button_ambiguous_fails_fast_without_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr(fl, "dump_evidence", _fake_evidence)
+    page = FakePage(js={fl._STAMP_SHARE_BTN_JS: "ambiguous:2"})
+    with pytest.raises(FlowError):
+        asyncio.run(fl._find_share_button(page, "T", _cfg(tmp_path),
+                                          lambda *a: None))
+    assert sum(1 for e, _ in page.evals if e == fl._STAMP_SHARE_BTN_JS) == 1
+
+
+def test_hub_group_circle_polls_until_dialog_hydrates(tmp_path, monkeypatch):
+    monkeypatch.setattr(fl, "dump_evidence", _fake_evidence)
+    page = FakePage(js={fl._STAMP_HUB_GROUP_JS: ["no-dialog", "none", "ok"]})
+    loc = asyncio.run(fl._find_hub_group_circle(page, _cfg(tmp_path),
+                                                lambda *a: None))
+    assert loc.sel == '[data-ap-share-group="1"]'
+    assert sum(1 for e, _ in page.evals if e == fl._STAMP_HUB_GROUP_JS) == 3

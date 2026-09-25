@@ -407,6 +407,10 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(env_file=args.env_file)
     if args.dry_run:
         cfg.dry_run = True
+    if args.list:
+        # --list never opens a dialog; report dry so the LIVE banner cannot
+        # mislead (the plan table publishes nothing regardless).
+        cfg.dry_run = True
     elif args.live and cfg.dry_run:
         # repo fail-safe (same gate as poster.main --live / poster.crosspost):
         # going live needs the explicit AP_DRY_RUN=false in .env — a CLI flag

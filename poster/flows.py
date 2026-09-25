@@ -729,17 +729,26 @@ _STAMP_SHARE_BTN_JS = r"""
   const sel = '[role="button"], button, a, [role="link"]';
   const isShare = (el) => fold(el.textContent) === 'compartir'
                       || fold(el.getAttribute('aria-label') || '') === 'compartir';
+  // RACE + DRIFT LESSON (dry ladder 2026-09-25): the card title node often
+  // carries a price/status suffix ('TAHOE LT $340.000 en venta'), so exact
+  // fold equality missed it; accept STARTS-WITH + short guard instead.
+  const titleNodes = [...document.querySelectorAll('span,div,h1,h2,h3')]
+    .filter((n) => {
+      const t = fold(n.textContent);
+      return t === want
+          || (t.startsWith(want) && t.length <= want.length + 40);
+    });
+  if (!titleNodes.length) return 'no-card';
   let card = null;
-  for (const n of document.querySelectorAll('span,div,h1,h2,h3')) {
-    if (fold(n.textContent) !== want) continue;
-    let p = n;
-    for (let i = 0; i < 8 && p; i++) {
-      if ([...p.querySelectorAll(sel)].some(isShare)) { card = p; break; }
-      p = p.parentElement;
+  for (const n of titleNodes) {
+    let q = n;
+    for (let i = 0; i < 8 && q; i++) {
+      if ([...q.querySelectorAll(sel)].some(isShare)) { card = q; break; }
+      q = q.parentElement;
     }
     if (card) break;
   }
-  if (!card) return 'no-card';
+  if (!card) return 'none-in-card';
   const hits = [...card.querySelectorAll(sel)].filter(isShare);
   if (hits.length === 0) return 'none-in-card';
   if (hits.length > 1) return 'ambiguous:' + hits.length;
@@ -1025,24 +1034,43 @@ async def fetch_listing_description(page: Page, cfg: Config, log: log_fn = print
 
 
 async def _find_share_button(page: Page, title: str, cfg: Config, log: log_fn):
-    info = await page.evaluate(_STAMP_SHARE_BTN_JS, {"title": title})
-    if not str(info).startswith("ok"):
-        shot = await dump_evidence(page, cfg.screenshot_dir, "share_no_button")
-        raise FlowError(f"no unique card 'Compartir' button for {title!r} "
-                        f"({info}). Evidence: {shot}")
-    return page.locator('[data-ap-share="1"]').first
+    """Poll the card-stamp JS until the card hydrates (same discipline as
+    _find_more_button — the selling feed renders skeletons first; an instant
+    single stamp blinked at a skeleton on the 2026-09-25 dry ladder)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + SHARE_STEP_TIMEOUT_MS / 1000.0
+    info = "no-card"
+    while True:
+        info = str(await page.evaluate(_STAMP_SHARE_BTN_JS, {"title": title}))
+        if info.startswith("ok"):
+            return page.locator('[data-ap-share="1"]').first
+        if info.startswith("ambiguous") or loop.time() >= deadline:
+            break
+        await page.wait_for_timeout(SHARE_SETTLE_POLL_MS)
+    shot = await dump_evidence(page, cfg.screenshot_dir, "share_no_button")
+    raise FlowError(f"no unique card 'Compartir' button for {title!r} "
+                    f"({info}, after a {SHARE_STEP_TIMEOUT_MS} ms hydration "
+                    f"wait). Evidence: {shot}")
 
 
 async def _find_hub_group_circle(page: Page, cfg: Config, log: log_fn):
-    info = await page.evaluate(_STAMP_HUB_GROUP_JS,
-                               {"text": SHARE_GROUP_TEXT,
-                                "aria": SHARE_PICKER_TITLE})
-    if not str(info).startswith("ok"):
-        shot = await dump_evidence(page, cfg.screenshot_dir,
-                                   "share_no_group_circle")
-        raise FlowError(f"share hub has no unique '{SHARE_GROUP_TEXT}' circle "
-                        f"({info}). Evidence: {shot}")
-    return page.locator('[data-ap-share-group="1"]').first
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + SHARE_STEP_TIMEOUT_MS / 1000.0
+    info = "no-dialog"
+    while True:
+        info = str(await page.evaluate(_STAMP_HUB_GROUP_JS,
+                                       {"text": SHARE_GROUP_TEXT,
+                                        "aria": SHARE_PICKER_TITLE}))
+        if info.startswith("ok"):
+            return page.locator('[data-ap-share-group="1"]').first
+        if info.startswith("ambiguous") or loop.time() >= deadline:
+            break
+        await page.wait_for_timeout(SHARE_SETTLE_POLL_MS)
+    shot = await dump_evidence(page, cfg.screenshot_dir,
+                               "share_no_group_circle")
+    raise FlowError(f"share hub has no unique '{SHARE_GROUP_TEXT}' circle "
+                    f"({info}, after a {SHARE_STEP_TIMEOUT_MS} ms hydration "
+                    f"wait). Evidence: {shot}")
 
 
 async def open_share_hub(page: Page, listing, cfg: Config,
