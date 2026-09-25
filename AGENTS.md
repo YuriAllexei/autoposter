@@ -42,6 +42,18 @@ poetry run python -m poster.main --list-groups  # joined groups + rotation state
 # logged in · 3 identity switch failed · 4 joined-groups fetch failed
 # (or --live refused without AP_DRY_RUN=false).
 
+# INDIVIDUAL SHARE (each listing → EACH group, one submission per pair):
+poetry run python -m poster.share --list    # plan table, opens NO dialog
+poetry run python -m poster.share --dry-run # full N x M matrix, staged only
+poetry run python -m poster.share --dry-run --listing TAHOE --group 198780741983035
+# 3 listings x 40 groups = 120 shares; uncapped by default (--max 0;
+# AP_MAX_POSTS_PER_RUN stays TEXT-pipeline only). Sleep between shares:
+# AP_SHARE_GAP_MIN/MAX_SECONDS in .env (default 2-3s, cap 20s, exactly N-1
+# gaps, never after the last). Dashboard: 'Dry run · share' button +
+# SHARE . LEDGER AUDIT card. rc: 0 >=1 staged/published · 1 nothing done or
+# joins-fetch broke · 2/3 identity · 4 --live refused without AP_DRY_RUN=false.
+# Ledger kind:share rows = audit/Discord ONLY (no cross-run memory).
+
 # CROSSPOST (marketplace listings → groups; same AP_DRY_RUN fail-safe —
 # --live is REFUSED unless .env says AP_DRY_RUN=false):
 poetry run python -m poster.crosspost --list    # cards + feed table, opens NO dialog
@@ -129,7 +141,16 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
    (success/failure/abort/crash all notify). Dry-run stages never count as
    published; `skipped` never counts. Webhook failure never changes rc. A real publish carries a best-effort `delivered` verdict
   (pending|live|unknown) — see verify_pending; it never gates the status.
-8. CROSSPOST TRACKING (user spec 2026-09-23): the batch plan is computed from
+8. INDIVIDUAL SHARES (recording 20260925T014900Z + probe): card 'Compartir'
+   → hub 'Grupo' → 'Compartir en un grupo' dialog — its 'Todos los grupos'
+   page VIRTUALIZES at ~10 rows, so every group is reached by EXACT-NAME
+   typeahead in 'Buscar grupos' (two exact-name rows abort that share rather
+   than risk the wrong group) → composer ('Crea una publicación pública...'
+   variant, NOT 'Escribe algo') waits the link preview, pastes the listing's
+   OWN description verbatim (from the item page 'Descripcion del vendedor',
+   'Ver mas' expanded once if present) → dry = X-close + crossshare_staged
+   shot; the Publicar locator is never constructed on the dry path.
+9. CROSSPOST TRACKING (user spec 2026-09-23): the batch plan is computed from
    the dialog's OWN group list each time it opens; the only memory is a set
    of already-batched group ids FOR THE CURRENT LISTING IN THE CURRENT RUN.
    Do NOT make run_listing read ledger/coverage across runs — the user
