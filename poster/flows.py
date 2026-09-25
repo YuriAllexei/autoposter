@@ -370,6 +370,23 @@ def _norm(s: str) -> str:
     return " ".join(unicodedata.normalize("NFC", str(s)).split()).casefold()
 
 
+def _tag_ranks(groups: list) -> list:
+    """Tag each group with which OCCURRENCE of its folded name it is, in
+    payload order (payload order == DOM row order).
+
+    [live lesson 2026-09-23, batch-2 mis-tick] real dialogs contain DUPLICATE
+    GROUP NAMES (two joined 'venta de carros chihuahua'!) and rows carry no
+    id, so a name->first-row mapping silently ticks the wrong group. Both the
+    crosspost dialog and the individual share picker use this one helper.
+    """
+    ranks: dict[str, int] = {}
+    for g in groups:
+        k = _norm(g["name"])
+        g["rank"] = ranks.get(k, 0)
+        ranks[k] = g["rank"] + 1
+    return groups
+
+
 def parse_crosspost_targets(text: str) -> tuple[list, int, str]:
     """Pure/testable: first chunk of MarketplaceCrossPostDialogQuery ->
     ([{'id','name'}...] in dialog order), per-submission cap, and the LISTING
@@ -503,11 +520,7 @@ async def open_crosspost_dialog(page: Page, title: str, cfg: Config,
     # Payload order == DOM row order (the skeleton wait above already
     # relies on that 1:1), so tag each group with which occurrence of its
     # NAME it is — select clicks the same occurrence among the rows.
-    ranks: dict[str, int] = {}
-    for g in groups:
-        k = _norm(g["name"])
-        g["rank"] = ranks.get(k, 0)
-        ranks[k] = g["rank"] + 1
+    _tag_ranks(groups)
     if not groups:
         shot = await dump_evidence(page, cfg.screenshot_dir, "crosspost_no_targets")
         raise FlowError(f"dialog offered 0 groups for {title!r}. "
@@ -655,3 +668,606 @@ async def dismiss_crosspost_dialog(page: Page, log: log_fn = print) -> None:
         log("crosspost: dialog dismissed after failure")
     except Exception as e:  # dismissal must never mask the original error
         log(f"crosspost: dialog dismissal failed ({type(e).__name__}: {e})")
+
+
+# ==========================================================================
+# INDIVIDUAL SHARE — one marketplace listing into ONE group per submission
+# (the LISTING CARD's 'Compartir' -> hub -> 'Grupo' -> picker -> composer).
+#
+# GROUND TRUTH: recording 20260925T014900Z_marketplace_individual_listing_
+# individua (shots 001 card / 002 hub / 003 picker / 004 composer / 005-006
+# 'Ver más') + a LIVE read-only probe, scripts/probe_share_flow.py, run
+# 2026-09-25 against the real selling page. The probe pinned the accessible
+# NAMES the recorder could not (it logs visible text only):
+#   card  'Compartir' button   -> [role=button], folded text 'Compartir'
+#   hub dialog 'Compartir'     -> has a 'Compartir en' section, close
+#                                 [role=button][aria-label='Cerrar'], a
+#                                 'Compartir ahora' primary and the four
+#                                 circles Messenger / WhatsApp / Grupo /
+#                                 Copiar enlace; the GRUPO circle carries
+#                                 aria-label 'Compartir en un grupo'
+#                                 (exact-fold text 'Grupo' — never confusable
+#                                 with 'Compartir ahora'/'Compartir en el
+#                                 feed (solo lectura)')
+#   picker 'Compartir en un grupo' -> search box placeholder 'Buscar grupos'
+# Layout key: share_composer_es_v1. Everything here is text/aria/role only.
+# ==========================================================================
+
+SHARE_HUB_TEXT = "Compartir"
+SHARE_GROUP_TEXT = "Grupo"
+SHARE_PICKER_TITLE = "Compartir en un grupo"
+SHARE_SEARCH_PLACEHOLDER = "Buscar grupos"
+SHARE_COMPOSER_PLACEHOLDER = "Crea una publicación pública..."
+SHARE_COMPOSER_TITLE = "Crear publicación"
+SHARE_PUBLISH_TEXT = "Publicar"
+SHARE_DESC_HEADING = "Descripción del vendedor"
+SHARE_SEE_MORE_TEXT = "Ver más"
+SHARE_PREVIEW_PENDING = "Creando vista previa del enlace"
+SHARE_ATTACH_LABEL = "Agregar a tu publicación"
+SHARE_ITEM_URL = "https://www.facebook.com/marketplace/item/{id}/"
+#: both friendly names are fixed by the recording/probe (req bodies)
+XPOST_GROUPS_OP = "CometGroupResharesSearchDataSourceQuery"
+XPOST_MUTATION_OP = "ComposerStoryCreateMutation"
+
+#: condition-wait ceiling for the share ritual steps (the plan's
+#: `cfg.hard_timeout`). Config carries no such knob and Slice A must not add
+#: config fields (that is the pipeline slice's scope), so the cap lives in one
+#: proven module constant; the settle poll is the link-preview poll interval.
+SHARE_STEP_TIMEOUT_MS = 30000
+SHARE_SETTLE_POLL_MS = 500
+
+#: stamps the CARD's 'Compartir' button: the selling feed renders one card per
+#: listing and each card exposes its own Compartir, so the ONLY safe anchor is
+#: the card that CONTAINS the listing title (same discipline as
+#: _find_more_button's 'Más opciones para <title>').
+_STAMP_SHARE_BTN_JS = r"""
+(args) => {
+  const fold = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  document.querySelectorAll('[data-ap-share]').forEach(
+    (e) => e.removeAttribute('data-ap-share'));
+  const want = fold(args.title);
+  const sel = '[role="button"], button, a, [role="link"]';
+  const isShare = (el) => fold(el.textContent) === 'compartir'
+                      || fold(el.getAttribute('aria-label') || '') === 'compartir';
+  let card = null;
+  for (const n of document.querySelectorAll('span,div,h1,h2,h3')) {
+    if (fold(n.textContent) !== want) continue;
+    let p = n;
+    for (let i = 0; i < 8 && p; i++) {
+      if ([...p.querySelectorAll(sel)].some(isShare)) { card = p; break; }
+      p = p.parentElement;
+    }
+    if (card) break;
+  }
+  if (!card) return 'no-card';
+  const hits = [...card.querySelectorAll(sel)].filter(isShare);
+  if (hits.length === 0) return 'none-in-card';
+  if (hits.length > 1) return 'ambiguous:' + hits.length;
+  hits[0].setAttribute('data-ap-share', '1');
+  return 'ok';
+}
+"""
+
+#: the hub is the modal dialog carrying BOTH the 'Compartir' title and the
+#: 'Compartir en' section (probe 2026-09-25).
+_WAIT_HUB_JS = r"""
+() => {
+  const fold = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  return [...document.querySelectorAll('[role="dialog"]')].some((d) => {
+    const t = fold(d.innerText || d.textContent);
+    return t.includes('compartir') && t.includes('compartir en');
+  });
+}
+"""
+
+#: stamps the hub's Grupo circle (exact folded text 'Grupo' or the proven
+#: aria-label 'Compartir en un grupo').
+_STAMP_HUB_GROUP_JS = r"""
+(args) => {
+  const fold = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  document.querySelectorAll('[data-ap-share-group]').forEach(
+    (e) => e.removeAttribute('data-ap-share-group'));
+  const want = fold(args.text), aria = fold(args.aria);
+  const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+  const d = dialogs.find((x) => x.getAttribute('aria-modal') === 'true')
+            || dialogs[dialogs.length - 1];
+  if (!d) return 'no-dialog';
+  const sel = '[role="button"], [role="link"], button, a';
+  const hits = [...d.querySelectorAll(sel)].filter((el) =>
+    fold(el.textContent) === want
+    || fold(el.getAttribute('aria-label') || '') === aria);
+  const inner = hits.filter((el) => !hits.some((o) => o !== el && el.contains(o)));
+  if (inner.length === 0) return 'none';
+  if (inner.length > 1) return 'ambiguous:' + inner.length;
+  inner[0].setAttribute('data-ap-share-group', '1');
+  return 'ok';
+}
+"""
+
+#: picker hydration gate: the picker dialog must LIST the name we expect (the
+#: graphql answer arrives BEFORE the rows do — same race as the crosspost
+#: dialog's skeleton rows).
+_PICKER_READY_JS = r"""
+(args) => {
+  const fold = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const want = fold(args.name);
+  if (!want) return true;
+  return [...document.querySelectorAll('[role="dialog"]')].some(
+    (d) => fold(d.innerText || d.textContent).includes(want));
+}
+"""
+
+#: stamps a picker ROW whose folded FIRST LINE is exactly the group name (a
+#: row also carries the privacy line '· Grupo público', an inner span does
+#: not — that is what separates the row container from the label).
+#: TWO innermost rows with the same exact name => 'ambiguous' (the picker is a
+#: TYPEAHEAD of the joined groups; duplicate names exist — see _tag_ranks).
+_STAMP_SHARE_ROW_JS = r"""
+(args) => {
+  const fold = (s) => (s || "").replace(/\s+/g, " ").trim();
+  document.querySelectorAll('[data-ap-share-row]').forEach(
+    (e) => e.removeAttribute('data-ap-share-row'));
+  const want = fold(args.name).toLowerCase();
+  const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+  const d = dialogs.find((x) => x.getAttribute('aria-modal') === 'true')
+            || dialogs[dialogs.length - 1];
+  if (!d) return 'no-dialog';
+  const sel = 'div,span,a,[role="button"],[role="link"]';
+  const hits = [...d.querySelectorAll(sel)].filter((el) => {
+    const raw = el.innerText || el.textContent || '';
+    const first = fold(raw.split('\n')[0]).toLowerCase();
+    return first === want && /p[úu]blico/i.test(fold(raw));
+  });
+  const inner = hits.filter((el) => !hits.some((o) => o !== el && el.contains(o)));
+  if (inner.length === 0) return 'none';
+  if (inner.length > 1) return 'ambiguous:' + inner.length;
+  inner[0].setAttribute('data-ap-share-row', '1');
+  return 'ok';
+}
+"""
+
+#: read-back after picking the group: the picker has handed over to the SHARE
+#: COMPOSER ('Crear publicación' header + the 'Crea una publicación pública...'
+#: placeholder, shot 004).
+_COMPOSER_OPEN_JS = r"""
+(args) => {
+  const fold = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const ph = fold(args.ph), title = fold(args.title);
+  return [...document.querySelectorAll('[role="dialog"]')].some((d) => {
+    const t = fold(d.innerText || d.textContent);
+    return t.includes(ph) && t.includes(title);
+  });
+}
+"""
+
+#: link-preview settle (recording 01:53:33 rendered the card as
+#: '<title>\nCreando vista previa del enlace' and only later as a real card):
+#: the pending line must be GONE and the attachment chrome present (footer
+#: 'Agregar a tu publicación' or the preview's link back to the item).
+_PREVIEW_SETTLED_JS = r"""
+(args) => {
+  const fold = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+  const d = dialogs.find((x) => x.getAttribute('aria-modal') === 'true')
+            || dialogs[dialogs.length - 1];
+  if (!d) return false;
+  const t = fold(d.innerText || d.textContent);
+  if (t.includes(fold(args.pending))) return false;
+  return t.includes(fold(args.attach))
+      || !!d.querySelector('a[href*="/marketplace/item/"]');
+}
+"""
+
+#: reads the 'Descripción del vendedor' block on the ITEM page, stamping the
+#: 'Ver más' control when the description is collapsed. The description span
+#: OWNS the control (recording xpath .../span[1]/div[1]/span[1]), so the first
+#: ancestor that adds text beyond the control is the block.
+_SHARE_DESC_JS = r"""
+(args) => {
+  const fold = (s) => (s || "").replace(/\s+/g, " ").trim();
+  const want = fold(args.heading).toLowerCase();
+  document.querySelectorAll('[data-ap-share-more]').forEach(
+    (e) => e.removeAttribute('data-ap-share-more'));
+  let head = null;
+  for (const n of document.querySelectorAll('h1,h2,h3,h4,h5,span,div,strong,b')) {
+    if (fold(n.innerText || n.textContent).toLowerCase() === want) { head = n; break; }
+  }
+  if (!head) return {found: false};
+  const sel = 'div,span,a,[role="button"],button';
+  let ctrl = null, scope = head.parentElement;
+  for (let i = 0; i < 6 && scope && !ctrl; i++) {
+    ctrl = [...scope.querySelectorAll(sel)].find((e) =>
+      /^(ver m[aá]s|ver menos)$/i.test(fold(e.innerText || e.textContent)));
+    if (!ctrl) scope = scope.parentElement;
+  }
+  const ctrlText = ctrl ? fold(ctrl.innerText || ctrl.textContent).toLowerCase() : '';
+  let block = null;
+  if (ctrl) {
+    let el = ctrl;
+    while (el.parentElement && fold(el.parentElement.innerText
+             || el.parentElement.textContent) === fold(el.innerText
+             || el.textContent)) el = el.parentElement;
+    block = el.parentElement || el;
+  }
+  if (!block) block = scope || head.parentElement;
+  const raw = block ? (block.innerText || block.textContent || '') : '';
+  const kept = [];
+  for (const ln of raw.split('\n')) {
+    const f = fold(ln).toLowerCase();
+    if (f === want || /^(ver m[aá]s|ver menos)$/.test(f)) continue;
+    kept.push(ln);
+  }
+  const text = kept.join('\n').replace(/^\s+|\s+$/g, '');
+  if (ctrl && ctrlText === 'ver más') ctrl.setAttribute('data-ap-share-more', '1');
+  return {found: true, text: text, has_more: ctrlText === 'ver más',
+          has_less: ctrlText === 'ver menos'};
+}
+"""
+
+
+def _obj_field(obj, key: str, default: str = "") -> str:
+    """One field off a Mapping OR an object (listings.ActiveListing is a
+    TypedDict, tests hand plain dicts, share.py may hand a small dataclass)."""
+    for get in (lambda: obj[key], lambda: getattr(obj, key)):
+        try:
+            val = get()
+        except (TypeError, KeyError, IndexError, AttributeError):
+            continue
+        if val:
+            return str(val)
+    return default
+
+
+def _graphql_filter(op: str):
+    """Friendly-name filter shared by both share ops (the req body carries
+    `fb_api_req_friendly_name=<op>`)."""
+    def ok(resp) -> bool:
+        try:
+            req = resp.request
+            return "graphql" in req.url and op in (req.post_data or "")
+        except Exception:
+            return False
+    return ok
+
+
+def parse_share_targets(text: str) -> list[dict]:
+    """Pure/testable: CometGroupResharesSearchDataSourceQuery (or the
+    '...DialogPushPageContentQuery' sibling) -> [{'id','name'}] in payload
+    order. [proven: probe §5] both carry `viewer.actor.groups.nodes[]` =
+    {id, name, ...}; the push-page variant uses edges[].node. Order == DOM row
+    order, so the index here is the only truth about row order."""
+    body = str(text or "").lstrip()
+    for pref in ("for(;;);", ")]}'", "while(1);"):
+        if body.startswith(pref):
+            body = body[len(pref):].lstrip()
+    data = json.loads(body.split("\n", 1)[0])["data"]
+    nodes: list = []
+
+    def walk(node) -> bool:
+        if isinstance(node, dict):
+            for key in ("nodes", "edges"):
+                seq = node.get(key)
+                if isinstance(seq, list):
+                    for item in seq:
+                        if not isinstance(item, dict):
+                            continue
+                        cand = item.get("node") if key == "edges" else item
+                        if isinstance(cand, dict) and cand.get("id"):
+                            nodes.append(cand)
+                    if nodes:
+                        return True
+            for val in node.values():
+                if walk(val):
+                    return True
+        elif isinstance(node, list):
+            for val in node:
+                if walk(val):
+                    return True
+        return False
+
+    walk(data)
+    return [{"id": str(n["id"]), "name": str(n.get("name") or "")} for n in nodes]
+
+
+async def _read_share_desc(page: Page, cfg: Config) -> dict:
+    """Condition-wait (bounded poll, never a fixed sleep) for the item page's
+    'Descripción del vendedor' block to exist."""
+    attempts = max(1, SHARE_STEP_TIMEOUT_MS // SHARE_SETTLE_POLL_MS)
+    info: dict = {"found": False}
+    for i in range(attempts):
+        info = await page.evaluate(_SHARE_DESC_JS, {"heading": SHARE_DESC_HEADING})
+        if isinstance(info, dict) and info.get("found"):
+            return info
+        if i + 1 < attempts:
+            await page.wait_for_timeout(SHARE_SETTLE_POLL_MS)
+    return info if isinstance(info, dict) else {"found": False}
+
+
+async def fetch_listing_description(page: Page, cfg: Config, log: log_fn = print,
+                                    listing=None) -> str:
+    """A1: the LISTING's own description text, verbatim (1:1), taken from the
+    item page's 'Descripción del vendedor' block — the seller's tab. Clicks
+    'Ver más' ONCE when the block is collapsed (recording 01:55:27), then
+    re-reads; a click that does not grow the text is logged, never fatal."""
+    listing_id = _obj_field(listing, "id")
+    url = _obj_field(listing, "url")
+    if not url:
+        if not listing_id:
+            raise FlowError("fetch_listing_description: listing has neither "
+                            "url nor id")
+        url = SHARE_ITEM_URL.format(id=listing_id)
+    if url not in (_obj_field(page, "url")):
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    info = await _read_share_desc(page, cfg)
+    if not info.get("found"):
+        shot = await dump_evidence(page, cfg.screenshot_dir, "share_desc_missing")
+        raise FlowError(f"'{SHARE_DESC_HEADING}' section never rendered at "
+                        f"{url}. Evidence: {shot}")
+    if info.get("has_more"):
+        more = page.locator('[data-ap-share-more="1"]').first
+        before = str(info.get("text") or "")
+        if await more.count() and await more.is_visible():
+            await more.click(timeout=8000)
+            after = await _read_share_desc(page, cfg)
+            grown = str(after.get("text") or "")
+            if len(grown) <= len(before):
+                log(f"share: '{SHARE_SEE_MORE_TEXT}' click did not grow the "
+                    f"description ({len(before)} -> {len(grown)} chars) — "
+                    f"using what the page gave us")
+            else:
+                info = after
+        else:
+            log("share: 'Ver más' stamped but not clickable — using the "
+                "collapsed text")
+    text = str(info.get("text") or "").strip()
+    log(f"share: description for {listing_id or url} = {len(text)} chars")
+    return text
+
+
+async def _find_share_button(page: Page, title: str, cfg: Config, log: log_fn):
+    info = await page.evaluate(_STAMP_SHARE_BTN_JS, {"title": title})
+    if not str(info).startswith("ok"):
+        shot = await dump_evidence(page, cfg.screenshot_dir, "share_no_button")
+        raise FlowError(f"no unique card 'Compartir' button for {title!r} "
+                        f"({info}). Evidence: {shot}")
+    return page.locator('[data-ap-share="1"]').first
+
+
+async def _find_hub_group_circle(page: Page, cfg: Config, log: log_fn):
+    info = await page.evaluate(_STAMP_HUB_GROUP_JS,
+                               {"text": SHARE_GROUP_TEXT,
+                                "aria": SHARE_PICKER_TITLE})
+    if not str(info).startswith("ok"):
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "share_no_group_circle")
+        raise FlowError(f"share hub has no unique '{SHARE_GROUP_TEXT}' circle "
+                        f"({info}). Evidence: {shot}")
+    return page.locator('[data-ap-share-group="1"]').first
+
+
+async def open_share_hub(page: Page, listing, cfg: Config,
+                         log: log_fn = print) -> list[dict]:
+    """A2: card 'Compartir' -> hub -> 'Grupo' -> picker. Returns the picker's
+    groups as [{'id','name','rank'}] in payload/row order (rank = occurrence
+    of that same folded name). Raises FlowError with evidence otherwise.
+    NOTHING downstream of the picker is touched here."""
+    title = _obj_field(listing, "title")
+    btn = await _find_share_button(page, title, cfg, log)
+    await human_sleep(cfg, log, "before opening the listing 'Compartir' hub",
+                      cfg.crosspost_action_min, cfg.crosspost_action_max)
+    await btn.click()
+    try:
+        await page.wait_for_function(_WAIT_HUB_JS, timeout=SHARE_STEP_TIMEOUT_MS)
+    except PWTimeoutError as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir, "share_hub_missing")
+        raise FlowError(f"share hub never rendered for {title!r}. "
+                        f"Evidence: {shot}") from e
+    log(f"share: hub open for {title[:44]!r}")
+    circle = await _find_hub_group_circle(page, cfg, log)
+    await human_sleep(cfg, log, "hub -> 'Grupo' circle",
+                      cfg.crosspost_action_min, cfg.crosspost_action_max)
+    #: the picker's own group payload arrives on the circle click — arm the
+    #: response BEFORE it so the eligible groups can never be missed.
+    try:
+        async with page.expect_response(_graphql_filter(XPOST_GROUPS_OP),
+                                        timeout=SHARE_STEP_TIMEOUT_MS) as rinfo:
+            await circle.click()
+        resp = await rinfo.value
+        groups = parse_share_targets(await resp.text())
+    except FlowError:
+        raise
+    except Exception as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "share_picker_parse")
+        raise FlowError(f"share picker payload unreadable "
+                        f"({type(e).__name__}: {e}). Evidence: {shot}") from e
+    if not groups:
+        shot = await dump_evidence(page, cfg.screenshot_dir, "share_no_targets")
+        raise FlowError(f"share picker offered 0 groups for {title!r}. "
+                        f"Evidence: {shot}")
+    _tag_ranks(groups)
+    first = groups[0]["name"]
+    try:
+        await page.wait_for_function(_PICKER_READY_JS, arg={"name": first},
+                                     timeout=SHARE_STEP_TIMEOUT_MS)
+    except PWTimeoutError as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "share_picker_skeleton")
+        raise FlowError(f"share picker never listed {first!r} "
+                        f"({len(groups)} in payload). Evidence: {shot}") from e
+    log(f"share: hub opened, {len(groups)} groups in payload")
+    return groups
+
+
+async def _fill_share_search(page: Page, name: str, cfg: Config,
+                             log: log_fn) -> None:
+    """Paste the group name into 'Buscar grupos' (paste ritual: insertText
+    fires the events FB's React input listens for, exactly like the composer)."""
+    box = page.get_by_placeholder(SHARE_SEARCH_PLACEHOLDER).first
+    try:
+        await box.wait_for(state="visible", timeout=SHARE_STEP_TIMEOUT_MS)
+    except PWTimeoutError as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "share_no_search_box")
+        raise FlowError(f"'{SHARE_SEARCH_PLACEHOLDER}' input never appeared. "
+                        f"Evidence: {shot}") from e
+    await box.click()
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Delete")
+    await page.evaluate("(t) => document.execCommand('insertText', false, t)",
+                        name)
+    log(f"share: searched {name[:44]!r} in '{SHARE_SEARCH_PLACEHOLDER}'")
+
+
+async def _share_search(page: Page, query: str, name: str, cfg: Config,
+                        log: log_fn) -> int:
+    """Type `query` into 'Buscar grupos' and wait for the debounced typeahead
+    (it answers with the SAME op as the picker boot). The response is armed
+    BEFORE the input so the answer can never be missed; a search that answers
+    nothing is NOT fatal — the DOM decides, and a missing typeahead only costs
+    the log line. Returns the row count the payload promised."""
+    promised = 0
+    try:
+        async with page.expect_response(_graphql_filter(XPOST_GROUPS_OP),
+                                        timeout=SHARE_STEP_TIMEOUT_MS) as rinfo:
+            await _fill_share_search(page, query, cfg, log)
+        resp = await rinfo.value
+        promised = len(parse_share_targets(await resp.text()))
+    except FlowError:
+        raise
+    except Exception as e:
+        log(f"share: typeahead response not observed for {query[:44]!r} "
+            f"({type(e).__name__}) — judging the DOM directly")
+    try:
+        await page.wait_for_function(_PICKER_READY_JS, arg={"name": name},
+                                     timeout=SHARE_STEP_TIMEOUT_MS)
+    except PWTimeoutError:
+        log(f"share: picker never listed {name[:44]!r} after the search "
+            f"(payload promised {promised} rows)")
+    return promised
+
+
+async def pick_share_group(page: Page, group, cfg: Config,
+                           log: log_fn = print) -> None:
+    """A3: search the group in the picker and click its row, then read back
+    that the SHARE COMPOSER opened. NEVER guesses between two identical rows
+    (duplicate names exist) — an exact-name tie is a FlowError."""
+    name = _obj_field(group, "name")
+    if not name:
+        raise FlowError("pick_share_group: group has no name")
+    for attempt, query in enumerate((name, name[:20]), 1):
+        promised = await _share_search(page, query, name, cfg, log)
+        info = await page.evaluate(_STAMP_SHARE_ROW_JS, {"name": name})
+        if str(info).startswith("ambiguous"):
+            shot = await dump_evidence(page, cfg.screenshot_dir,
+                                       "crossshare_ambiguous_row")
+            raise FlowError(f"ambiguous duplicate {name!r} in the typeahead "
+                            f"result ({info}) — refusing to guess which group. "
+                            f"Evidence: {shot}")
+        if str(info).startswith("ok"):
+            break
+        log(f"share: no picker row for {name!r} (search {attempt}/2, payload "
+            f"said {promised} rows)")
+    else:
+        shot = await dump_evidence(page, cfg.screenshot_dir, "crossshare_no_row")
+        raise FlowError(f"share_group_row_missing: no picker row for {name!r} "
+                        f"after 2 searches. Evidence: {shot}")
+    await page.locator('[data-ap-share-row="1"]').first.click()
+    try:
+        await page.wait_for_function(_COMPOSER_OPEN_JS,
+                                     arg={"ph": SHARE_COMPOSER_PLACEHOLDER,
+                                          "title": SHARE_COMPOSER_TITLE},
+                                     timeout=SHARE_STEP_TIMEOUT_MS)
+    except PWTimeoutError as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir, "crossshare_no_row")
+        raise FlowError(f"share_group_row_missing: clicking {name!r} never "
+                        f"opened the share composer. Evidence: {shot}") from e
+    log(f"share: composer open for {name[:44]!r}")
+
+
+async def _close_share_dialog(page: Page, cfg: Config, log: log_fn) -> None:
+    """Close the share composer/ hub without submitting: its 'Cerrar' header
+    button (probe: aria-label 'Cerrar'), Escape as fallback, then the same
+    fade-aware 'no aria-modal dialog' wait the crosspost path uses."""
+    closed = False
+    try:
+        closer = page.locator(
+            '[role="dialog"] [role="button"][aria-label*="errar" i], '
+            '[role="dialog"] [role="button"][aria-label*="lose" i]').first
+        if await closer.count() and await closer.is_visible():
+            await closer.click(timeout=8000)
+            closed = True
+    except PWTimeoutError:
+        closed = False
+    if not closed:
+        await page.keyboard.press("Escape")
+        log("share: closed the dialog with Escape (no 'Cerrar' button)")
+    try:
+        await page.wait_for_function(_DIALOG_GONE_JS, timeout=10000)
+    except PWTimeoutError as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crossshare_close_stuck")
+        raise FlowError(f"share dialog survived the close (10s). "
+                        f"Evidence: {shot}") from e
+
+
+async def stage_or_publish_share(page: Page, cfg: Config, log: log_fn = print,
+                                 description: str = "", group=None) -> str:
+    """A4: the OPEN share composer -> stage (dry) or publish (live).
+
+    Dry: dump evidence under 'crossshare_staged', close via 'Cerrar', verify
+    the dialog is gone, return 'staged'. The Publicar locator is NEVER built
+    on this path (a dry share must be structurally incapable of publishing).
+    Live: arm the ComposerStoryCreateMutation response, click the folded
+    'Publicar', wait for the dialog to go away, return 'published'."""
+    name = _obj_field(group, "name")
+    try:
+        await page.wait_for_function(
+            _PREVIEW_SETTLED_JS,
+            arg={"pending": SHARE_PREVIEW_PENDING, "attach": SHARE_ATTACH_LABEL},
+            timeout=SHARE_STEP_TIMEOUT_MS)
+    except PWTimeoutError as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crossshare_preview_stuck")
+        raise FlowError(f"share link preview never settled (still "
+                        f"'{SHARE_PREVIEW_PENDING}'). Evidence: {shot}") from e
+    box = page.locator('div[role="dialog"] [contenteditable="true"]').first
+    await _ensure_text_1to1(page, box, description, cfg, log)
+    if cfg.dry_run:
+        shot = await dump_evidence(page, cfg.screenshot_dir, "crossshare_staged")
+        await _close_share_dialog(page, cfg, log)
+        log(f"DRY RUN — share staged for {name[:44]!r}, "
+            f"'{SHARE_PUBLISH_TEXT}' NOT clicked (evidence {shot})")
+        return "staged"
+    btn = page.get_by_role("button", name=SHARE_PUBLISH_TEXT, exact=True)
+    if await btn.count() != 1 or not await btn.first.is_visible():
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crossshare_no_publish")
+        raise FlowError(f"'{SHARE_PUBLISH_TEXT}' button not unique/visible in "
+                        f"the share composer ({await btn.count()}) — refusing "
+                        f"to guess-click. Evidence: {shot}")
+    await human_sleep(cfg, log, "share composer -> Publicar",
+                      cfg.crosspost_action_min, cfg.crosspost_action_max)
+    try:
+        async with page.expect_response(_graphql_filter(XPOST_MUTATION_OP),
+                                        timeout=SHARE_STEP_TIMEOUT_MS) as rinfo:
+            await btn.first.click()
+        await rinfo.value
+    except Exception as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crossshare_publish_unknown")
+        raise FlowError(f"'{SHARE_PUBLISH_TEXT}' fired no "
+                        f"{XPOST_MUTATION_OP} ({type(e).__name__}: {e}) — "
+                        f"OUTCOME UNKNOWN, check manually. "
+                        f"Evidence: {shot}") from e
+    try:
+        await page.wait_for_function(_DIALOG_GONE_JS,
+                                     timeout=SHARE_STEP_TIMEOUT_MS)
+    except PWTimeoutError as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crossshare_publish_timeout")
+        raise FlowError(f"share composer still open after "
+                        f"'{SHARE_PUBLISH_TEXT}' — OUTCOME UNKNOWN, check "
+                        f"manually before retrying. Evidence: {shot}") from e
+    log(f"share: published to {name[:44]!r} ({XPOST_MUTATION_OP})")
+    return "published"
