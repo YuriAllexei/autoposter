@@ -1150,29 +1150,41 @@ def test_share_audit_is_empty_without_share_rows(tmp_path):
     assert st["share"]["rows"] == [] and st["share"]["available"] is False
 
 
-def test_share_mode_builds_dry_command_and_refuses_live():
+def test_share_mode_builds_dry_and_live_commands():
+    """Live unlocked 2026-09-25: bare `-m poster.share` (no flag) rides the
+    SAME fail-safe as the other live pipelines — it publishes only because
+    .env says AP_DRY_RUN=false, enforced again by the child itself."""
     assert build_command("share", False, "PY") == [
         "PY", "-m", "poster.share", "--dry-run"]
-    with pytest.raises(runner_mod.RunRejected):
-        build_command("share", True, "PY")
+    assert build_command("share", True, "PY") == ["PY", "-m", "poster.share"]
     assert MODE_SPECS["share"]["module"] == "poster.share"
     assert MODE_SPECS["share"]["dry_flag"] == "--dry-run"
-    assert MODE_SPECS["share"]["live_allowed"] is False
+    assert MODE_SPECS["share"]["live_allowed"] is True
 
 
-def test_manager_refuses_a_live_share_run(tmp_path):
-    mgr = RunManager(tmp_path, RingBuffer(), python="PY", probe=lambda m: True)
-    with pytest.raises(runner_mod.RunRejected):
-        mgr.start("share", live=True)
+def test_manager_spawns_a_live_share_run(tmp_path):
+    seen: dict = {}
+
+    def spy_popen(cmd, **kw):
+        seen["cmd"] = cmd
+        return FakeProc(["[share] published\n"])
+
+    mgr = RunManager(tmp_path, RingBuffer(), python="PY", probe=lambda m: True,
+                     popen=spy_popen)
+    started = mgr.start("share", live=True)
+    assert mgr.wait_idle(5) is True
+    assert seen["cmd"] == ["PY", "-m", "poster.share"]
+    assert started["live"] is True
 
 
-def test_live_server_refuses_a_live_share_with_400(live_server):
-    """There is no live share variant: the request is well-formed but the
-    mode cannot publish — 400 with a reason, nothing spawned."""
+def test_live_server_gates_live_share_by_confirm_not_mode(live_server):
+    """The mode CAN publish now; what still stands between the button and
+    Facebook is the shared PUBLICAR gate (403, nothing spawned) exactly like
+    live groups — the old mode-level 400 refusal is gone."""
     base, manager, _buffer = live_server
     status, data = _post(base + "/api/run", {"mode": "share", "live": True})
-    assert status == 400 and manager.status()["running"] is False
-    assert data["error"]
+    assert status == 403 and "PUBLICAR" in data["error"]
+    assert manager.status()["running"] is False
 
 
 def test_manager_spawns_a_dry_share_run(tmp_path):
@@ -1199,6 +1211,8 @@ def test_page_has_share_button_stat_and_audit_card():
     assert 'id="b-dry-share"' in html
     assert "Dry run · Individual Listing Sequential Group Posting" in html
     assert 'run("share", false)' in html
+    assert 'id="b-live-share"' in html
+    assert 'run("share", true)' in html
     assert "share lines" in html
     assert "SHARE · LEDGER AUDIT" in html
     assert 'id="shares"' in html and '"shares"' in html    # card table + render

@@ -225,6 +225,7 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
                autocomplete="off" spellcheck="false">
         <button class="danger" id="b-live-groups">LIVE · Entire Inventory Distribution</button>
         <button class="danger" id="b-live-cross">LIVE · Initial Post Sharing</button>
+        <button class="danger" id="b-live-share">LIVE · Individual Listing Sequential Group Posting</button>
       </span>
       <span class="btnset">
         <button class="danger" id="b-kill" disabled>Kill run</button>
@@ -533,7 +534,7 @@ function renderButtons(st) {
   const avail = (st.modes || {});
   busy = !!m.running;
   ["b-dry-groups", "b-dry-cross", "b-dry-share", "b-live-groups", "b-live-cross",
-   "b-refresh-groups"].forEach((id) => { $(id).disabled = busy; });
+   "b-live-share", "b-refresh-groups"].forEach((id) => { $(id).disabled = busy; });
   if (avail.crosspost === false) {
     $("b-dry-cross").disabled = true;
     $("b-dry-cross").title = "poster.crosspost is not on this checkout";
@@ -543,6 +544,8 @@ function renderButtons(st) {
   if (avail.share === false) {
     $("b-dry-share").disabled = true;
     $("b-dry-share").title = "poster.share is not on this checkout";
+    $("b-live-share").disabled = true;
+    $("b-live-share").title = "poster.share is not on this checkout";
   }
   $("b-refresh-listings").disabled = avail["listings-refresh"] !== true;
   $("b-kill").disabled = !busy;
@@ -550,8 +553,10 @@ function renderButtons(st) {
   if (envDry) {
     $("b-live-groups").disabled = true;
     $("b-live-cross").disabled = true;
+    $("b-live-share").disabled = true;
     $("b-live-groups").title = "AP_DRY_RUN=true in .env — edit it to arm live runs";
     $("b-live-cross").title = "AP_DRY_RUN=true in .env — edit it to arm live runs";
+    $("b-live-share").title = "AP_DRY_RUN=true in .env — edit it to arm live runs";
   }
 }
 
@@ -592,6 +597,7 @@ $("b-dry-cross").onclick = () => run("crosspost", false);
 $("b-dry-share").onclick = () => run("share", false);
 $("b-live-groups").onclick = () => run("groups", true);
 $("b-live-cross").onclick = () => run("crosspost", true);
+$("b-live-share").onclick = () => run("share", true);
 $("b-refresh-groups").onclick = () => {
   post("/api/refresh-groups").then(() => poll())
     .catch((e) => note("refresh refused: " + e.message));

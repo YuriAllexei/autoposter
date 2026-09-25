@@ -50,8 +50,8 @@ poetry run python -m poster.share --dry-run --listing TAHOE --group 198780741983
 # AP_MAX_POSTS_PER_RUN stays TEXT-pipeline only). Sleep between shares:
 # AP_SHARE_GAP_MIN/MAX_SECONDS in .env (default 10-15s, cap 20s, exactly N-1
 # gaps, never after the last). Dashboard: 'Individual Listing Sequential
-# Group Posting' button (dry-only) +
-# SHARE . LEDGER AUDIT card. rc: 0 >=1 staged/published · 1 nothing done or
+# Group Posting' dry + LIVE buttons (live behind the same PUBLICAR +
+# .env AP_DRY_RUN double gate as the others) + SHARE . LEDGER AUDIT card. rc: 0 >=1 staged/published · 1 nothing done or
 # joins-fetch broke · 2/3 identity · 4 --live refused without AP_DRY_RUN=false.
 # Ledger kind:share rows = audit/Discord ONLY (no cross-run memory).
 

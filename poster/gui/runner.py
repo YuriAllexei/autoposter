@@ -47,7 +47,9 @@ MODE_SPECS: dict[str, dict[str, Any]] = {
     "crosspost": {"module": "poster.crosspost", "dry_flag": "--dry-run",
                   "live_allowed": True, "label": "Initial Post Sharing run"},
     "share": {"module": "poster.share", "dry_flag": "--dry-run",
-              "live_allowed": False, "label": "Individual Listing Sequential Group Posting run"},
+              # live unlocked 2026-09-25 (user ask): same double gate as the
+              # other pipelines (typed PUBLICAR + AP_DRY_RUN=false in .env).
+              "live_allowed": True, "label": "Individual Listing Sequential Group Posting run"},
     "groups-refresh": {"module": "poster.main", "dry_flag": "--list-groups",
                        "live_allowed": False, "label": "joined-groups refresh"},
     "listings-refresh": {"module": "poster.listings", "dry_flag": "",
