@@ -42,6 +42,13 @@ poetry run python -m poster.main --list-groups  # joined groups + rotation state
 # logged in · 3 identity switch failed · 4 joined-groups fetch failed
 # (or --live refused without AP_DRY_RUN=false).
 
+# MARKETPLACE INVENTORY (active listings + each item's OWN description):
+poetry run python -m poster.listings   # ACTIVE feed -> one visit per item page
+# ('Descripción del vendedor' + a single 'Ver más' click — recording
+# 20261007T022643Z_marketplace_inventory) -> .local-capture/cache/listings.json,
+# which the dashboard's Marketplace listings card renders. --no-descriptions
+# skips the per-item page visits (id/title/price only, much faster).
+
 # INDIVIDUAL SHARE (each listing → EACH group, one submission per pair):
 poetry run python -m poster.share --list    # plan table, opens NO dialog
 poetry run python -m poster.share --dry-run # full N x M matrix, staged only
@@ -51,7 +58,10 @@ poetry run python -m poster.share --dry-run --listing TAHOE --group 198780741983
 # AP_SHARE_GAP_MIN/MAX_SECONDS in .env (default 10-15s, cap 20s, exactly N-1
 # gaps, never after the last). Dashboard: 'Individual Listing Sequential
 # Group Posting' dry + LIVE buttons (live behind the same PUBLICAR +
-# .env AP_DRY_RUN double gate as the others) + SHARE . LEDGER AUDIT card. rc: 0 >=1 staged/published · 1 nothing done or
+# .env AP_DRY_RUN double gate as the others) + SHARE . LEDGER AUDIT card, plus
+# a per-row 'dry'/'LIVE' pair on the Marketplace listings card that runs THIS
+# pipeline for that one listing (runner mode share-one -> poster.share
+# --listing <exact id>; the id must be plain digits). rc: 0 >=1 staged/published · 1 nothing done or
 # joins-fetch broke · 2/3 identity · 4 --live refused without AP_DRY_RUN=false.
 # Ledger kind:share rows = audit/Discord ONLY (no cross-run memory).
 
@@ -241,6 +251,21 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
   rows ('Grupos sugeridos') have no checkbox → unreachable by design.
 - Crosspost reaches the groups the TEXT pipeline must skip: 'Vender algo'
   marketplace-tab groups still appear in the crosspost dialog.
+- MARKETPLACE INVENTORY DESCRIPTIONS (recording
+  20261007T022643Z_marketplace_inventory): the selling feed layout is
+  unchanged and the item page's 'Descripción del vendedor' + ONE 'Ver más'
+  click is the PROVEN description source, so `poster.listings`
+  (attach_descriptions) stamps each row through the EXISTING
+  `flows.fetch_listing_description` — no new selectors, and the returned text
+  never contains the 'Ver más'/'Ver menos' labels. A failing item page keeps
+  the row with description "" (logged) and never kills the refresh; the
+  snapshot is re-saved afterwards. The same text also rides the item page's
+  GraphQL payload as `redacted_description.text` (MarketplacePDPContainerQuery,
+  doc_id 28944633605130422) — its variables carry ~15 recorder-scrubbed
+  relay-provider names and are UNPINNED, so do NOT switch transport without a
+  fresh trace recovery + live proof. 'Entire inventory' = the ACTIVE tab only;
+  sold/expired/draft tabs need their own recording of the feed's state/status
+  variables.
 
 ## Adding groups
 
