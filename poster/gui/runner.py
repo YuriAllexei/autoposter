@@ -50,6 +50,13 @@ MODE_SPECS: dict[str, dict[str, Any]] = {
               # live unlocked 2026-09-25 (user ask): same double gate as the
               # other pipelines (typed PUBLICAR + AP_DRY_RUN=false in .env).
               "live_allowed": True, "label": "Individual Listing Sequential Group Posting run"},
+    "share-one": {"module": "poster.share", "dry_flag": "--dry-run",
+                  # the per-listing dashboard button: the SAME sequential
+                  # pipeline narrowed to one marketplace listing id, which
+                  # build_command validates and appends as
+                  # `--listing <id>` (poster.share's existing exact-id filter).
+                  "live_allowed": True, "per_listing": True,
+                  "label": "Per-listing Sequential Group Posting run"},
     "groups-refresh": {"module": "poster.main", "dry_flag": "--list-groups",
                        "live_allowed": False, "label": "joined-groups refresh"},
     "listings-refresh": {"module": "poster.listings", "dry_flag": "",
@@ -107,13 +114,26 @@ def has_cli_main(dotted: str) -> bool:
     return "__name__" in source and "__main__" in source
 
 
-def build_command(mode: str, live: bool, python: str | None = None) -> list[str]:
+def build_command(mode: str, live: bool, python: str | None = None,
+                  listing: str | None = None) -> list[str]:
     """The exact CLI invocation for a mode. Pure: trivially unit-testable."""
     if mode not in MODE_SPECS:
         raise RunRejected(f"unknown mode {mode!r}")
     spec = MODE_SPECS[mode]
     if live and not spec["live_allowed"]:
         raise RunRejected(f"mode {mode!r} is read-only and cannot run live")
+    lid: str | None = None
+    if spec.get("per_listing"):
+        # Marketplace listing ids are pure digits (997052559461487). The digit
+        # check is the injection guard: the id lands in a child's argv, so
+        # flags, spaces or punctuation are refused here instead of forwarded
+        # (Popen takes a list and no shell is involved either).
+        lid = str(listing or "").strip()
+        if not lid or not lid.isdigit() or len(lid) > 20:
+            raise RunRejected(
+                f"mode {mode!r} needs a plain numeric listing id, got {listing!r}")
+    elif listing is not None and str(listing).strip():
+        raise RunRejected(f"mode {mode!r} does not take a listing argument")
     exe = python or sys.executable
     if mode == "groups-refresh":
         return [exe, "-m", spec["module"], spec["dry_flag"]]
@@ -122,6 +142,8 @@ def build_command(mode: str, live: bool, python: str | None = None) -> list[str]
         # for a pipeline whose whole job is fetch -> snapshot.
         return [exe, "-m", spec["module"]]
     cmd = [exe, "-m", spec["module"]]
+    if lid:
+        cmd += ["--listing", lid]
     if not live:
         cmd.append(spec["dry_flag"])
     return cmd
@@ -251,8 +273,13 @@ class RunManager:
             f"({MODE_SPECS[mode]['label']} unavailable)")
 
     # -- control ----------------------------------------------------------
-    def start(self, mode: str, live: bool = False) -> dict[str, Any]:
-        """Launch one run. Raises RunBusy / RunRejected / RunUnavailable."""
+    def start(self, mode: str, live: bool = False,
+              listing: str | None = None) -> dict[str, Any]:
+        """Launch one run. Raises RunBusy / RunRejected / RunUnavailable.
+
+        `listing` is the optional marketplace listing id for mode 'share-one'
+        (validated inside build_command — the ONE validator).
+        """
         if mode not in MODE_SPECS:
             raise RunRejected(f"unknown mode {mode!r}")
         spec = MODE_SPECS[mode]
@@ -263,7 +290,7 @@ class RunManager:
             raise RunBusy("a run is already in progress")
         try:
             self._require_available(mode)
-            cmd = build_command(mode, live, self.python)
+            cmd = build_command(mode, live, self.python, listing=listing)
             self.buffer.append(f"[gui] {utc_stamp()} starting "
                                f"{spec['label']} ({'LIVE' if live else 'dry'})")
             self.buffer.append("[gui] $ " + " ".join(cmd))

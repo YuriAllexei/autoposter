@@ -242,6 +242,42 @@ def test_read_only_modes_refuse_live():
         build_command("nonsense", False, "PY")
 
 
+def test_share_one_command_carries_the_listing_filter():
+    """The per-listing dashboard button runs the SAME sequential pipeline,
+    narrowed to exactly one marketplace listing id."""
+    assert build_command("share-one", False, "PY", listing=L1) == [
+        "PY", "-m", "poster.share", "--listing", L1, "--dry-run"]
+    assert build_command("share-one", True, "PY", listing=L1) == [
+        "PY", "-m", "poster.share", "--listing", L1]
+
+
+def test_share_one_requires_a_clean_numeric_listing_id():
+    """The id reaches a child's argv: anything that is not a plain digit run is
+    refused before it is forwarded (flags, spaces, shell punctuation, junk)."""
+    for bad in (None, "", "   ", "abc", "--dry-run", "1;rm", L1 + "x", "1" * 21):
+        with pytest.raises(runner_mod.RunRejected):
+            build_command("share-one", False, "PY", listing=bad)
+
+
+def test_other_modes_refuse_a_listing_argument():
+    with pytest.raises(runner_mod.RunRejected):
+        build_command("groups", False, "PY", listing=L1)
+    # absent (None) or empty stays valid for every other mode
+    assert build_command("groups", False, "PY", listing="") == [
+        "PY", "-m", "poster.main", "--dry-run"]
+
+
+def test_manager_forwards_listing_into_the_child_command(tmp_path):
+    proc = FakeProc(["done\n"])
+    mgr = RunManager(tmp_path, RingBuffer(), python="PY", probe=lambda m: True,
+                     cli_probe=lambda m: True, popen=lambda *a, **k: proc)
+    started = mgr.start("share-one", live=False, listing=L1)
+    assert started["mode"] == "share-one" and started["pid"] == 4321
+    assert mgr.wait_idle(5) is True
+    text = "\n".join(mgr.buffer.since(0)["lines"])
+    assert f"$ PY -m poster.share --listing {L1} --dry-run" in text
+
+
 def test_module_available_is_false_for_missing_modules():
     assert runner_mod.module_available("poster.gui") is True
     assert runner_mod.module_available("definitely_not_a_module_xyz") is False
