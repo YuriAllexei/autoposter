@@ -116,6 +116,7 @@ class ActiveListing(TypedDict):
     # simply has no verification/integrity field (never guessed as approved)
     approved: bool | None
     rejected: bool | None
+    description: str
 
 
 class ListingsFetchError(RuntimeError):
@@ -351,6 +352,7 @@ def extract_active_listings(payload: dict) -> tuple[list[ActiveListing], dict]:
             price=_price_text(listing),
             approved=approved,
             rejected=_truthy_field(listing, "listing_is_rejected"),
+            description="",
         ))
     info = _page_info(payload, connection)
     return listings, {

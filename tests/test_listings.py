@@ -166,9 +166,9 @@ def test_fields_and_order_match_the_recording_shape():
     rows, _ = extract_active_listings(payload)
     assert rows == [
         {"id": TAHOE, "title": "2019 Chevrolet Tahoe LT", "price": "$340.000",
-         "approved": True, "rejected": False},
+         "approved": True, "rejected": False, "description": ""},
         {"id": SECOND, "title": "2014 Jeep Gran Cherokee summi", "price": "$185.000",
-         "approved": False, "rejected": False},
+         "approved": False, "rejected": False, "description": ""},
     ]
     # the SET id must never be mistaken for a listing id
     assert all(not r["id"].startswith("9" + TAHOE[:1]) for r in rows)
@@ -311,3 +311,10 @@ def test_navigates_to_the_selling_route_first(tmp_path):
                     url="https://www.facebook.com/")
     asyncio.run(fetch_active_listings(page, _cfg(tmp_path), None))
     assert page.gotos == ["https://www.facebook.com/marketplace/you/selling/"]
+
+
+def test_extract_rows_carry_an_empty_description_field():
+    body = _multipart([_listing(TAHOE, "2019 Chevrolet Tahoe LT", "$340.000")],
+                      None, False)
+    rows, _info = extract_active_listings(parse_graphql_body(body))
+    assert rows[0]["description"] == ""
