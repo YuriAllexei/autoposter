@@ -2,10 +2,12 @@
 
 Where crosspost batches up to 20 groups inside a single dialog submission,
 this pipeline walks the matrix the other way: for EVERY active listing, for
-EVERY joined group, it opens the share hub afresh, reaches the group by NAME
-SEARCH in 'Buscar grupos', stages the composer with the listing link attached
-plus the listing description pasted 1:1, then stages (dry) or publishes (live)
-that single share. N listings x M groups = N*M shares, uncapped unless --max.
+EVERY group the picker offers, it opens the share hub afresh, picks the group
+as a ROW of the picker's own list (scroll, match folded name + occurrence —
+the 'Buscar grupos' typeahead is only a fallback: it provably misses groups the
+list offers), stages the composer with the listing link attached plus the
+listing description pasted 1:1, then stages (dry) or publishes (live) that
+single share. N listings x M groups = N*M shares, uncapped unless --max.
 
 Skeleton copied from poster/crosspost.py (argparse flags, identity ritual,
 fetch_active_listings, AP_DRY_RUN fail-safe, Discord in `finally`).
@@ -97,22 +99,6 @@ def filter_groups(groups: list, only) -> list[dict]:
     names = {_fold(w) for w in wanted}
     return [g for g in groups
             if str(g.get("id")) in ids or _fold(g.get("name")) in names]
-
-
-def ranked(group: dict, picker: list | None) -> dict:
-    """Attach the picker's `rank` (kth occurrence of the folded name, payload
-    order) to a joined-group dict before handing it to pick_share_group —
-    duplicate group names are disambiguated by rank, never by name lookup."""
-    rank = 0
-    key = _fold(group.get("name"))
-    for p in picker or []:
-        if isinstance(p, dict) and _fold(p.get("name")) == key:
-            try:
-                rank = int(p.get("rank") or 0)
-            except (TypeError, ValueError):
-                rank = 0
-            break
-    return {**group, "rank": rank}
 
 
 def write_targets_cache(listing: dict, picker: list | None, log) -> None:
@@ -224,12 +210,13 @@ async def run_listing(page, cfg: Config, recorder: RunRecorder, listing: dict,
                           cfg.crosspost_action_min, cfg.crosspost_action_max)
         try:
             await fl.dismiss_share_dialogs(page, cfg, log)
-            fresh = await _open_share_hub(page, listing, cfg, log,
-                                          lambda groups: None)
-            ranked_g = ranked(g, fresh or picker)
-            await fl.pick_share_group(page, ranked_g, cfg, log)
-            await fl.stage_or_publish_share(page, cfg, log, desc_cache[lid],
-                                            ranked_g)
+            await _open_share_hub(page, listing, cfg, log, lambda groups: None)
+            #: the plan entry carries the identity the picker is addressed by
+            #: (name + rank + name_total, from the SAME enumeration the plan
+            #: came from). Re-ranking against a fresh list would silently remap
+            #: a duplicated name to a different group — never do that again.
+            await fl.pick_share_group(page, g, cfg, log)
+            await fl.stage_or_publish_share(page, cfg, log, desc_cache[lid], g)
             recorder.share(listing, g, ok=True)
             shared += 1
             log(f"[share] {listing['title'][:40]!r} -> {g['name'][:34]!r} OK")
@@ -396,7 +383,7 @@ def _cli(argv: list[str] | None = None) -> argparse.Namespace:
         prog="python -m poster.share",
         description="Share each active MARKETPLACE listing into EACH group its "
                     "picker offers, individually (listing -> Compartir -> Grupo -> "
-                    "name search -> composer -> description): every listing x "
+                    "row pick -> composer -> description): every listing x "
                     "every group = its own share, one dialog at a time. "
                     "Dry-run stages each composer then closes it — nothing is "
                     "ever submitted.")

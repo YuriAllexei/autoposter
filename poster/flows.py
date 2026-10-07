@@ -58,6 +58,14 @@ class FlowError(RuntimeError):
     """A proven selector did not resolve — abort this group, save evidence."""
 
 
+class SharePickerNotOpen(FlowError):
+    """The 'Compartir en un grupo' dialog never rendered after the hub's 'Grupo'
+    circle was clicked. RETRYABLE (live 2026-10-07: a click that lands while the
+    surface is mid-transition can leave no dialog behind at all), unlike the
+    structural failures ('no unique card Compartir', hub never rendered) where a
+    second attempt would only burn the same seconds."""
+
+
 # ---- text matchers (UI language, not obfuscated classes) --------------------
 COMPOSER_TRIGGER_RE = re.compile(
     r"^\s*(?:Escribe algo|Write something|¿Qu[eé] estás pensando|What'?s on your mind)"
@@ -404,21 +412,36 @@ def _norm(s: str) -> str:
     return " ".join(unicodedata.normalize("NFC", str(s)).split()).casefold()
 
 
-def _tag_ranks(groups: list) -> list:
-    """Tag each group with which OCCURRENCE of its folded name it is, in
-    payload order (payload order == DOM row order).
+def tag_row_identity(groups: list) -> list:
+    """Annotate each group with `rank` (0-based OCCURRENCE of its folded name,
+    in list order) and `name_total` (how many entries share that folded name).
 
     [live lesson 2026-09-23, batch-2 mis-tick] real dialogs contain DUPLICATE
-    GROUP NAMES (two joined 'venta de carros chihuahua'!) and rows carry no
-    id, so a name->first-row mapping silently ticks the wrong group. Both the
-    crosspost dialog and the individual share picker use this one helper.
+    GROUP NAMES (two joined 'venta de carros chihuahua'!) and rows carry no id,
+    so a name->first-row mapping silently ticks the wrong group.
+
+    [live 2026-10-07, 15/60 shares lost] `rank` now addresses a row directly
+    inside the picker list (no typeahead), and `name_total` is the SAFETY
+    GUARD: at click time the list must still hold exactly this many rows with
+    that name, otherwise the occurrence index could point at a DIFFERENT group
+    and the share must FAIL instead of clicking. Both the crosspost dialog and
+    the individual share picker use this one helper.
     """
+    keys = [_norm(g["name"]) for g in groups]
+    totals: dict[str, int] = {}
+    for k in keys:
+        totals[k] = totals.get(k, 0) + 1
     ranks: dict[str, int] = {}
-    for g in groups:
-        k = _norm(g["name"])
+    for g, k in zip(groups, keys):
         g["rank"] = ranks.get(k, 0)
         ranks[k] = g["rank"] + 1
+        g["name_total"] = totals[k]
     return groups
+
+
+def _tag_ranks(groups: list) -> list:
+    """Back-compat alias for tag_row_identity (crosspost + tests)."""
+    return tag_row_identity(groups)
 
 
 def parse_crosspost_targets(text: str) -> tuple[list, int, str]:
@@ -843,14 +866,17 @@ _PICKER_READY_JS = r"""
 #: stamps a picker ROW whose folded FIRST LINE is exactly the group name (a
 #: row also carries the privacy line '· Grupo público', an inner span does
 #: not — that is what separates the row container from the label).
-#: TWO innermost rows with the same exact name => 'ambiguous' (the picker is a
-#: TYPEAHEAD of the joined groups; duplicate names exist — see _tag_ranks).
+#: SEVERAL innermost rows with the same exact name are normal (duplicate names
+#: exist — see tag_row_identity): args.rank picks WHICH occurrence, so the
+#: occurrence the plan recorded is the occurrence clicked. Only
+#: rank >= len(hits) is reported as 'ambiguous'.
 _STAMP_SHARE_ROW_JS = r"""
 (args) => {
   const fold = (s) => (s || "").replace(/\s+/g, " ").trim();
   document.querySelectorAll('[data-ap-share-row]').forEach(
     (e) => e.removeAttribute('data-ap-share-row'));
   const want = fold(args.name).toLowerCase();
+  const rank = Math.max(0, parseInt(args.rank || 0, 10) || 0);
   const dialogs = [...document.querySelectorAll('[role="dialog"]')];
   const d = dialogs.find((x) => x.getAttribute('aria-modal') === 'true')
             || dialogs[dialogs.length - 1];
@@ -863,8 +889,8 @@ _STAMP_SHARE_ROW_JS = r"""
   });
   const inner = hits.filter((el) => !hits.some((o) => o !== el && el.contains(o)));
   if (inner.length === 0) return 'none';
-  if (inner.length > 1) return 'ambiguous:' + inner.length;
-  inner[0].setAttribute('data-ap-share-row', '1');
+  if (rank >= inner.length) return 'ambiguous:' + inner.length;
+  inner[rank].setAttribute('data-ap-share-row', '1');
   return 'ok';
 }
 """
@@ -1135,12 +1161,55 @@ async def _find_hub_group_circle(page: Page, cfg: Config, log: log_fn):
                     f"wait). Evidence: {shot}")
 
 
+def _discard_texts(awaitables: list) -> None:
+    """Close response-body awaitables that were collected but will never be
+    read: a hub open that fails must not leak 'coroutine was never awaited'
+    warnings (and must not hold a socket)."""
+    for item in awaitables:
+        close = getattr(item, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
 async def open_share_hub(page: Page, listing, cfg: Config,
-                         log: log_fn = print) -> list[dict]:
-    """A2: card 'Compartir' -> hub -> 'Grupo' -> picker. Returns the picker's
-    groups as [{'id','name','rank'}] in payload/row order (rank = occurrence
-    of that same folded name). Raises FlowError with evidence otherwise.
+                         log: log_fn = print, attempts: int = 2) -> list[dict]:
+    """A2: card 'Compartir' -> hub -> 'Grupo' -> picker.
+
+    Returns the picker's payload groups as [{'id','name','rank','name_total'}]
+    when the answer arrives, and [] when it does not: the picker LIST is the
+    source of truth (user rule 2026-09-25), so a missing graphql answer must
+    never fail the share.
+
+    Two attempts, because a click that lands while the surface is mid-transition
+    can leave NO dialog behind at all (evidence
+    share_picker_parse_20261007T050502Z.png shows the plain selling feed).
     NOTHING downstream of the picker is touched here."""
+    title = _obj_field(listing, "title")
+    last = "unknown"
+    for attempt in range(1, attempts + 1):
+        try:
+            return await _open_share_hub_once(page, listing, cfg, log)
+        except SharePickerNotOpen as e:
+            last = str(e)
+            log(f"share: hub open attempt {attempt}/{attempts} failed for "
+                f"{title[:40]!r}: {last}")
+            if attempt >= attempts:
+                break
+            await dismiss_share_dialogs(page, cfg, log)
+            await human_sleep(cfg, log, "before retrying the 'Compartir' hub",
+                              cfg.crosspost_action_min,
+                              cfg.crosspost_action_max)
+    raise SharePickerNotOpen(f"share picker never opened for {title!r} after "
+                             f"{attempts} attempts ({last})")
+
+
+async def _open_share_hub_once(page: Page, listing, cfg: Config,
+                               log: log_fn = print) -> list[dict]:
+    """One attempt at A2. Raises FlowError when the picker dialog never
+    rendered; the payload may still be empty (that is NOT an error)."""
     title = _obj_field(listing, "title")
     btn = await _find_share_button(page, title, cfg, log)
     await human_sleep(cfg, log, "before opening the listing 'Compartir' hub",
@@ -1156,36 +1225,49 @@ async def open_share_hub(page: Page, listing, cfg: Config,
     circle = await _find_hub_group_circle(page, cfg, log)
     await human_sleep(cfg, log, "hub -> 'Grupo' circle",
                       cfg.crosspost_action_min, cfg.crosspost_action_max)
-    #: the picker's own group payload arrives on the circle click — arm the
-    #: response BEFORE it so the eligible groups can never be missed.
+    #: the payload is a BONUS: collected from the sideline (same shape as
+    #: discover_share_groups) so a response that never comes cannot fail the
+    #: share — readiness is the DIALOG, not the graphql answer.
+    bodies: list = []
+
+    def on_resp(resp) -> None:
+        try:
+            req = resp.request
+            if "graphql" in req.url and XPOST_GROUPS_OP in (req.post_data or ""):
+                bodies.append(resp.text())
+        except Exception:
+            pass
+
+    page.on("response", on_resp)
     try:
-        async with page.expect_response(_graphql_filter(XPOST_GROUPS_OP),
-                                        timeout=SHARE_STEP_TIMEOUT_MS) as rinfo:
-            await circle.click()
-        resp = await rinfo.value
-        groups = parse_share_targets(await resp.text())
-    except FlowError:
-        raise
-    except Exception as e:
-        shot = await dump_evidence(page, cfg.screenshot_dir,
-                                   "share_picker_parse")
-        raise FlowError(f"share picker payload unreadable "
-                        f"({type(e).__name__}: {e}). Evidence: {shot}") from e
-    if not groups:
-        shot = await dump_evidence(page, cfg.screenshot_dir, "share_no_targets")
-        raise FlowError(f"share picker offered 0 groups for {title!r}. "
-                        f"Evidence: {shot}")
-    _tag_ranks(groups)
-    first = groups[0]["name"]
-    try:
-        await page.wait_for_function(_PICKER_READY_JS, arg={"name": first},
-                                     timeout=SHARE_STEP_TIMEOUT_MS)
-    except PWTimeoutError as e:
-        shot = await dump_evidence(page, cfg.screenshot_dir,
-                                   "share_picker_skeleton")
-        raise FlowError(f"share picker never listed {first!r} "
-                        f"({len(groups)} in payload). Evidence: {shot}") from e
-    log(f"share: hub opened, {len(groups)} groups in payload")
+        await circle.click()
+        try:
+            await page.wait_for_function(
+                _PICKER_OPEN_JS, arg={"ph": SHARE_SEARCH_PLACEHOLDER},
+                timeout=SHARE_STEP_TIMEOUT_MS)
+        except PWTimeoutError as e:
+            _discard_texts(bodies)
+            shot = await dump_evidence(page, cfg.screenshot_dir,
+                                       "share_picker_parse")
+            raise SharePickerNotOpen(
+                f"share picker never rendered for {title!r} "
+                f"(no '{SHARE_SEARCH_PLACEHOLDER}' + rows within "
+                f"{SHARE_STEP_TIMEOUT_MS}ms). Evidence: {shot}") from e
+        groups: list = []
+        for text in await asyncio.gather(*bodies, return_exceptions=True):
+            if isinstance(text, BaseException):
+                continue
+            for g in parse_share_targets(text):
+                if str(g.get("id")) not in {str(x.get("id")) for x in groups}:
+                    groups.append(g)
+    finally:
+        try:
+            page.remove_listener("response", on_resp)
+        except Exception:
+            pass
+    tag_row_identity(groups)
+    log(f"share: hub opened, picker list ready, {len(groups)} group(s) in "
+        "payload")
     return groups
 
 
@@ -1284,6 +1366,216 @@ _SCRAPE_PICKER_ROWS_JS = r"""
   return out;
 }
 """
+
+
+# ---------------------------------------------------------------------------
+# ROW-DIRECT picker selection (live 2026-10-07): the 'Buscar grupos' typeahead
+# provably cannot reach every group the picker list offers (15 of 60 shares
+# were lost: 6 rows were simply absent from the search results, 5 groups share
+# a name with a twin, 4 hub opens never produced the picker dialog). A group is
+# therefore addressed as a ROW of the list itself: fold the name, count
+# occurrences, click the kth match.
+# ---------------------------------------------------------------------------
+
+#: shared JS prelude: the picker dialog's OWN scrollable list container. Written
+#: once — the READER's row index is only valid for the STAMPER if both look at
+#: the same container and enumerate it the same way.
+_PICKER_SCROLLER_JS = r"""
+  const _ds = [...document.querySelectorAll('[role="dialog"]')]
+    .filter((d) => d.getAttribute('aria-modal') === 'true');
+  const _d = _ds[_ds.length - 1];
+  const _cs = _d ? [..._d.querySelectorAll('*')].filter((e) =>
+    e.scrollHeight > e.clientHeight + 24
+    && /auto|scroll/.test(getComputedStyle(e).overflowY)) : [];
+  const _el = _cs.length
+    ? _cs.sort((a, b) => b.scrollHeight - a.scrollHeight)[0] : null;
+"""
+
+#: the row predicate shared by the reader and the stamper: a picker row carries
+#: the group name on its first line PLUS a members/privacy line (an inner span
+#: carries one line only — that is what separates a row from its label).
+_PICKER_ROWS_EXPR_JS = r"""
+  const _rows = _el
+    ? [..._el.querySelectorAll('[role="button"],[role="link"],li')].filter((r) => {
+        const raw = (r.innerText || '').trim();
+        const lines = raw.split('\n').map((x) => x.trim()).filter(Boolean);
+        return lines.length >= 2 && /miembros|p[uú]blico|privado/i.test(raw);
+      })
+    : [];
+"""
+
+#: every row of the picker list, DOM order, with its index, its first line (the
+#: name) and its folded full text (name + members/privacy). No `args`.
+_PICKER_ROWS_JS = (
+    "() => {"
+    + _PICKER_SCROLLER_JS
+    + _PICKER_ROWS_EXPR_JS
+    + r"""
+  return _rows.map((r, i) => {
+    const raw = (r.innerText || '').trim();
+    const lines = raw.split('\n').map((x) => x.trim()).filter(Boolean);
+    return {i: i, name: lines[0], full: raw.replace(/\s+/g, ' ').trim()};
+  });
+}
+"""
+)
+
+#: scrolls the picker list back to the TOP, so a scan always walks the list in
+#: the same direction (the payload pages ride the motion — see _SCROLL_PICKER_JS).
+_PICKER_TOP_JS = (
+    "() => {"
+    + _PICKER_SCROLLER_JS
+    + r"""
+  if (!_el) return false;
+  _el.scrollTop = 0;
+  return true;
+}
+"""
+)
+
+#: stamps the row at index `i` — and ONLY after re-reading that row's first line
+#: and finding it equal to the expected name: a re-render between the read and
+#: the click must never make us click a different group.
+#: args = {'i': int, 'name': str}
+_STAMP_SHARE_ROW_AT_JS = (
+    "(args) => {"
+    + _PICKER_SCROLLER_JS
+    + _PICKER_ROWS_EXPR_JS
+    + r"""
+  document.querySelectorAll('[data-ap-share-row]').forEach(
+    (e) => e.removeAttribute('data-ap-share-row'));
+  const want = (args.name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (args.i < 0 || args.i >= _rows.length) {
+    return 'out-of-range:' + _rows.length;
+  }
+  const row = _rows[args.i];
+  const first = (row.innerText || '').split('\n')[0]
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+  if (want && first !== want) return 'mismatch:' + first;
+  row.setAttribute('data-ap-share-row', '1');
+  return 'ok';
+}
+"""
+)
+
+#: the picker is READY when its own LIST exists — not when a graphql answer
+#: arrives (live 2026-10-07: four hub opens fired no XPOST_GROUPS_OP and the
+#: evidence shot shows no dialog at all, so the response is no readiness
+#: signal at all).
+_PICKER_OPEN_JS = r"""
+(args) => {
+  const d = [...document.querySelectorAll('[role="dialog"]')]
+    .find((x) => x.getAttribute('aria-modal') === 'true');
+  if (!d) return false;
+  const box = d.querySelector('input[placeholder="' + args.ph + '"]')
+    || d.querySelector('[aria-label="' + args.ph + '"]');
+  const rows = [...d.querySelectorAll('[role="button"],[role="link"],li')]
+    .filter((r) => /miembros|p[uú]blico|privado/i.test(r.innerText || '')).length;
+  return !!box && rows > 0;
+}
+"""
+
+#: how many scroll steps a full picker scan may take. The live dialog holds ~60
+#: rows in ~8 viewports; the bound exists so a broken scroller can never hang a
+#: share.
+PICKER_SCAN_MAX_STEPS = 14
+
+
+async def _picker_rows(page: Page) -> list[dict]:
+    """[{i, name, full}] of the picker rows currently rendered, in DOM order.
+
+    Called with NO argument, so its JS must never mention `args`."""
+    try:
+        rows = await page.evaluate(_PICKER_ROWS_JS)
+    except Exception:
+        return []
+    out = []
+    for r in rows or []:
+        name = str(r.get("name") or "").strip()
+        if name:
+            out.append({"i": int(r.get("i") or 0), "name": name,
+                        "full": str(r.get("full") or "")})
+    return out
+
+
+async def _picker_all_rows(page: Page, cfg: Config,
+                           log: log_fn = print) -> list[dict]:
+    """Every row of the picker list: back to the top, then step DOWN until the
+    scroll can no longer advance (progressive motion — the list's graphql pages
+    ride it, and the DOM keeps every row it rendered; probe 2026-10-07).
+
+    v1 always performs the full scan because `name_total` needs the count of
+    same-named rows and only a complete list has it. (Cheap optimisation for
+    later: stop at the first exact hit when the group's `name_total` is 1.)"""
+    try:
+        await page.evaluate(_PICKER_TOP_JS)
+    except Exception:
+        pass
+    await page.wait_for_timeout(SHARE_SETTLE_POLL_MS)
+    for _step in range(PICKER_SCAN_MAX_STEPS):
+        try:
+            if not await page.evaluate(_SCROLL_PICKER_JS):
+                break
+        except Exception:
+            break
+        await page.wait_for_timeout(SHARE_SETTLE_POLL_MS)
+    rows = await _picker_rows(page)
+    log(f"share: picker list scanned, {len(rows)} row(s) mounted")
+    return rows
+
+
+def match_picker_row(rows: list, target: dict) -> dict:
+    """Pure: locate `target` ({name, rank, name_total}) in `rows`
+    ([{i, name, full}] in DOM order).
+
+    {'status': 'ok',  'i': <int>}   click row `i`
+    {'status': 'missing'}           the list holds no row with that name
+    {'status': 'shifted'}           the list holds a DIFFERENT number of rows
+                                    with that name than the plan recorded: the
+                                    occurrence index cannot be trusted, so the
+                                    caller must NOT click — posting to a wrong
+                                    group is worse than losing one share.
+    """
+    key = _norm(target.get("name") or "")
+    hits = [r for r in rows if _norm(r.get("name") or "") == key]
+    plan_total = int(target.get("name_total") or len(hits) or 1)
+    if not hits:
+        return {"status": "missing", "i": ""}
+    if len(hits) != plan_total:
+        return {"status": "shifted", "i": "", "seen": len(hits),
+                "plan": plan_total}
+    idx = int(target.get("rank") or 0)
+    if idx >= len(hits):
+        return {"status": "shifted", "i": "", "seen": len(hits),
+                "plan": plan_total}
+    return {"status": "ok", "i": int(hits[idx]["i"])}
+
+
+async def _click_picker_row(page: Page, i: int, group, cfg: Config,
+                            log: log_fn = print) -> None:
+    """Stamp row `i` (its name is verified on the way) and click it, then read
+    back that the SHARE COMPOSER opened. A stamp that reports a mismatch aborts
+    THIS share — nothing here ever guess-clicks."""
+    name = _obj_field(group, "name")
+    info = await page.evaluate(_STAMP_SHARE_ROW_AT_JS, {"i": i, "name": name})
+    if not str(info).startswith("ok"):
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crossshare_row_stamp")
+        raise FlowError(f"share row {i} for {name!r} could not be stamped "
+                        f"({info}) — the list changed under us. "
+                        f"Evidence: {shot}")
+    await page.locator('[data-ap-share-row="1"]').first.click()
+    try:
+        await page.wait_for_function(_COMPOSER_OPEN_JS,
+                                     arg={"ph": SHARE_COMPOSER_PLACEHOLDER,
+                                          "title": SHARE_COMPOSER_TITLE},
+                                     timeout=SHARE_STEP_TIMEOUT_MS)
+    except PWTimeoutError as e:
+        shot = await dump_evidence(page, cfg.screenshot_dir,
+                                   "crossshare_no_row")
+        raise FlowError(f"clicking row {i} ({name!r}) never opened the share "
+                        f"composer. Evidence: {shot}") from e
+    log(f"share: composer open for {name[:44]!r} (row {i})")
 
 
 async def _picker_dom_groups(page: Page) -> list[dict]:
@@ -1407,23 +1699,55 @@ async def discover_share_groups(page: Page, listing, cfg: Config,
 
 async def pick_share_group(page: Page, group, cfg: Config,
                            log: log_fn = print) -> None:
-    """A3: search the group in the picker and click its row, then read back
-    that the SHARE COMPOSER opened. NEVER guesses between two identical rows
-    (duplicate names exist) — an exact-name tie is a FlowError."""
+    """A3 (row-direct since 2026-10-07): pick the group out of the picker's OWN
+    list and click that row.
+
+    The 'Buscar grupos' typeahead is a FALLBACK only, because it provably
+    cannot reach every group the list offers: the live run of 2026-10-07 lost 6
+    shares to searches that returned near-name rows ('SOLO AUTOS CHIHUAHUA - 3'
+    was in the list, both searches missed it) and 5 more to groups whose name is
+    shared with a twin.
+
+    A 'shifted' verdict never falls back to a guess-click: with the list
+    changed, the occurrence index may point at another group."""
     name = _obj_field(group, "name")
     if not name:
         raise FlowError("pick_share_group: group has no name")
+    rows = await _picker_all_rows(page, cfg, log)
+    found = match_picker_row(rows, group)
+    if found["status"] == "ok":
+        await _click_picker_row(page, found["i"], group, cfg, log)
+        return
+    log(f"share: row-direct {found['status']} for {name[:44]!r} "
+        f"(scanned {len(rows)} row(s)) — falling back to "
+        f"'{SHARE_SEARCH_PLACEHOLDER}'")
+    await _pick_share_group_by_search(page, group, cfg, log)
+
+
+async def _pick_share_group_by_search(page: Page, group, cfg: Config,
+                                      log: log_fn = print) -> None:
+    """LEGACY fallback: search the group in the picker and click its row, then
+    read back that the SHARE COMPOSER opened.
+
+    Rank-aware: when several innermost rows carry the same folded name, the
+    one at `rank` is clicked (the occurrence the plan recorded) instead of
+    refusing; only `rank >= rows found` is an error."""
+    name = _obj_field(group, "name")
+    if not name:
+        raise FlowError("pick_share_group: group has no name")
+    rank = int(_obj_field(group, "rank") or 0)
     for attempt, query in enumerate((name, name[:20]), 1):
         promised = await _share_search(page, query, name, cfg, log)
-        info = await page.evaluate(_STAMP_SHARE_ROW_JS, {"name": name})
+        info = await page.evaluate(_STAMP_SHARE_ROW_JS,
+                                   {"name": name, "rank": rank})
+        if str(info).startswith("ok"):
+            break
         if str(info).startswith("ambiguous"):
             shot = await dump_evidence(page, cfg.screenshot_dir,
                                        "crossshare_ambiguous_row")
-            raise FlowError(f"ambiguous duplicate {name!r} in the typeahead "
-                            f"result ({info}) — refusing to guess which group. "
-                            f"Evidence: {shot}")
-        if str(info).startswith("ok"):
-            break
+            raise FlowError(f"ambiguous duplicate {name!r} at rank {rank} "
+                            f"({info}) — the search result holds fewer rows "
+                            f"than the plan. Evidence: {shot}")
         log(f"share: no picker row for {name!r} (search {attempt}/2, payload "
             f"said {promised} rows)")
     else:

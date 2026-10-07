@@ -466,11 +466,19 @@ def test_filter_groups_by_id_or_exact_name():
     assert len(sh.filter_groups(GROUPS, None)) == 2
 
 
-def test_ranked_takes_the_picker_rank_and_falls_back_to_zero():
-    picker = [{"id": "g1", "name": "VENTAS CUAUHTEMOC", "rank": 1}]
-    assert sh.ranked(GROUPS[0], picker)["rank"] == 1
-    assert sh.ranked(GROUPS[1], picker)["rank"] == 0     # not offered -> 0
-    assert sh.ranked(GROUPS[1], None)["rank"] == 0
+def test_ranked_was_replaced_by_the_plan_row_identity():
+    # ranked() re-derived rank from a FRESH picker list at click time, which
+    # could silently remap a duplicated name to another group. The plan entry
+    # (discover_share_groups -> tag_row_identity) is now the identity, so the
+    # helper is gone on purpose.
+    assert not hasattr(sh, "ranked")
+
+
+def test_plan_entries_carry_rank_and_name_total():
+    groups = sh.fl.tag_row_identity(
+        [{"id": "g1", "name": "venta de carros chihuahua"},
+         {"id": "g2", "name": "VENTA DE CARROS CHIHUAHUA"}])
+    assert [(g["rank"], g["name_total"]) for g in groups] == [(0, 2), (1, 2)]
 
 
 def test_targets_cache_roundtrip(tmp_path, monkeypatch):
