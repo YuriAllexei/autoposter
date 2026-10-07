@@ -325,6 +325,9 @@ def read_listings(paths: GuiPaths) -> dict[str, Any]:
                 "price": _as_str(item.get("price")),
                 "approved": item.get("approved"),
                 "rejected": item.get("rejected"),
+                # the seller's own text as fetched by poster.listings ("" when
+                # that item page could not be read, or on pre-field snapshots)
+                "description": _as_str(item.get("description")),
             })
     fetched = datetime.fromtimestamp(
         path.stat().st_mtime, tz=UTC).isoformat(timespec="seconds")

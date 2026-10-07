@@ -662,6 +662,32 @@ def test_cache_groups_json_is_honoured_when_newer(tmp_path):
     assert snap["count"] == 1 and snap["rows"][0]["id"] == G3
 
 
+def test_listings_rows_carry_the_seller_description(tmp_path):
+    """The dashboard's listings card shows the description the operator wrote;
+    state passes it straight through from the snapshot."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "listings.json").write_text(json.dumps([
+        {"id": L1, "title": "2017 Nissan Rogue", "price": "MX$215.000",
+         "approved": True, "rejected": False,
+         "description": "NISSAN ROGUE 2017\nlínea dos"}]),
+        encoding="utf-8")
+    rows = state_mod.read_listings(GuiPaths.from_root(tmp_path))["rows"]
+    assert rows[0]["description"] == "NISSAN ROGUE 2017\nlínea dos"
+
+
+def test_old_snapshot_without_description_reads_empty(tmp_path):
+    """Snapshots written before this field existed must keep working (the row
+    renders '—' instead of crashing the card)."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "listings.json").write_text(json.dumps([
+        {"id": L1, "title": "T", "price": "", "approved": None,
+         "rejected": None}]), encoding="utf-8")
+    rows = state_mod.read_listings(GuiPaths.from_root(tmp_path))["rows"]
+    assert rows[0]["description"] == ""
+
+
 def test_state_assembles_group_rollup_and_rotation(tmp_path):
     populated_root(tmp_path)
     st = build_state(GuiPaths.from_root(tmp_path), IDENTITY)
