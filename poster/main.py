@@ -31,7 +31,7 @@ from .config import Config, load_config
 from .fb import adopt_identity, dump_evidence, launch, make_log
 from .flows import COMPOSER_TRIGGER_RE, FlowError, Post, group_composer_es_v1, human_sleep
 from .groups_fetch import GroupsFetchError, fetch_joined_groups
-from .notify import build_payload, send_summary
+from .notify import build_payload, install_sigterm_notify, send_summary
 from .photos import collect_photos
 from .results import RunRecorder, last_attempt_ts, select_targets
 
@@ -251,6 +251,10 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
         run_id=datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
         dry_run=cfg.dry_run)
     finish = make_finish(cfg, recorder)
+    # the dashboard's Kill button SIGTERMs the whole process group: still
+    # deliver the ONE summary (monitoring rule: aborts report too), marked as
+    # killed. finish() is latched, so this can never double-post.
+    install_sigterm_notify(finish)
     try:
         post = build_post(cfg)
     except FileNotFoundError:

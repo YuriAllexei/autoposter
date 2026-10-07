@@ -33,7 +33,7 @@ from .config import Config, load_config
 from .fb import adopt_identity, launch
 from .flows import FlowError, human_sleep
 from .listings import ListingsFetchError, fetch_active_listings
-from .notify import build_share_payload, send_summary
+from .notify import build_share_payload, install_sigterm_notify, send_summary
 from .results import STATUS_PUBLISHED, STATUS_STAGED, RunRecorder
 
 SELLING_URL = "https://www.facebook.com/marketplace/you/selling/"
@@ -284,6 +284,11 @@ async def main_async(cfg: Config, args) -> int:
         send_summary(cfg.discord_webhook_url,
                      build_share_payload(summary, cfg.identity_label),
                      log=log)
+
+    # the dashboard's Kill button SIGTERMs the whole process group: still
+    # deliver the ONE summary (monitoring rule: aborts report too), marked as
+    # killed. finish() is latched, so this can never double-post.
+    install_sigterm_notify(finish)
 
     mode = ("DRY RUN (will NOT publish)" if cfg.dry_run
             else "*** LIVE — WILL PUBLISH ***")

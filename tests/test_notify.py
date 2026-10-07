@@ -1,9 +1,15 @@
 """Unit tests for the Discord notifier (payload build; network mocked)."""
 import json
+import signal
+import subprocess
+import sys
 import urllib.error
+from pathlib import Path
 
 from poster import notify
 from poster.notify import EMBED_DESC_LIMIT, build_payload
+
+REPO = Path(__file__).resolve().parents[1]
 
 
 def _summary(**over):
@@ -231,3 +237,47 @@ def test_share_payload_never_explodes_for_multi_car_runs():
     from poster.notify import build_share_payload
     desc = build_share_payload(_share_summary())["embeds"][0]["description"]
     assert "GRUPO 0" not in desc      # 3 listings x 40 groups stays aggregate
+
+
+# --------------------------------------------------------------------------
+# a run KILLED from the dashboard still reports (rule 7: aborts notify too)
+# --------------------------------------------------------------------------
+
+
+def test_sigterm_runs_the_abort_notice_then_dies_by_the_signal():
+    """The dashboard's Kill button SIGTERMs the child's whole process group;
+    the run must still deliver its ONE summary instead of dying silently — and
+    it must actually DIE (a hang there would hold the dashboard's lock)."""
+    code = (
+        "from poster.notify import install_sigterm_notify\n"
+        "install_sigterm_notify(lambda why: print('ABORT:', why, flush=True))\n"
+        "import os, signal\n"
+        "os.kill(os.getpid(), signal.SIGTERM)\n"
+        "print('NOT REACHED', flush=True)\n"
+    )
+    p = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       text=True, cwd=str(REPO), check=False, timeout=30)
+    assert p.returncode == -signal.SIGTERM             # died BY the signal
+    assert "ABORT: killed (SIGTERM)" in p.stdout
+    assert "NOT REACHED" not in p.stdout               # the handler never returns
+
+
+def test_sigterm_notifier_is_a_noop_off_the_main_thread():
+    import threading
+
+    from poster.notify import install_sigterm_notify
+    seen: list[bool] = []
+    t = threading.Thread(target=lambda: seen.append(
+        install_sigterm_notify(lambda _why: None)))
+    t.start()
+    t.join()
+    assert seen == [False]                          # no crash, no handler
+
+
+def test_pipelines_wire_sigterm_to_their_latched_finish():
+    """Both closing pipelines own a LATCHED finish() (one embed per run), so
+    routing SIGTERM through it cannot double-post. Pinned here because the
+    wiring is a single line a refactor could silently drop."""
+    for name in ("share.py", "main.py"):
+        src = (REPO / "poster" / name).read_text(encoding="utf-8")
+        assert "install_sigterm_notify(finish)" in src, name

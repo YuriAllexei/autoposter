@@ -7,9 +7,12 @@ colors green/amber/red, non-2xx never raises to the caller.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 
 from .results import STATUS_FAILED, STATUS_PUBLISHED, STATUS_SKIPPED, STATUS_STAGED
 
@@ -207,6 +210,37 @@ def build_share_payload(summary: dict, profile_name: str = "") -> dict:
             "footer": {"text": footer},
         }],
     }
+
+
+def install_sigterm_notify(finish: Callable[[str], None]) -> bool:
+    """Route SIGTERM through the run's own abort path.
+
+    The dashboard's Kill button SIGTERMs the child's whole process group; a
+    plain SIGTERM would end the run silently, but the monitoring rule is ONE
+    summary per run — aborts included. `finish` is each closing pipeline's
+    LATCHED summary closure, so calling it here can never double-post: it
+    writes the run log, sends the embed, and then the process dies by SIGTERM
+    itself (the parent sees rc -15 — exactly what an unhandled kill reports,
+    so the dashboard's busy lock still clears). Returns True when installed,
+    False off the main thread (`signal.signal` raises ValueError in workers —
+    a no-op, never a crash).
+    """
+    def _handler(_signum, _frame) -> None:
+        # the payload builders already prefix 'Run aborted:' — keep this short
+        finish("killed (SIGTERM)")
+        # Do NOT raise SystemExit here: unwinding tears down asyncio/playwright
+        # and HANGS (live 2026-10-07 — the killed child never exited, which
+        # would leave the dashboard's single-run lock held forever). Re-arm the
+        # default disposition and re-send the signal: the process dies exactly
+        # like an unhandled kill (rc -15, what the dashboard already shows).
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+    except ValueError:                 # only the main thread may install one
+        return False
+    return True
 
 
 def send_summary(webhook_url: str, payload: dict, log=print,
