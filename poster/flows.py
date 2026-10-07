@@ -947,6 +947,34 @@ _SHARE_DESC_JS = r"""
 """
 
 
+#: the composer's own expand/collapse control. The block's innerText can carry
+#: it INLINE at the end of the seller text (LIVE 2026-10-07:
+#: '... No se aceptan cambios Ver menos'), not just on a line of its own — the
+#: JS drops the standalone case, this drops the in-line one. Anchored to
+#: end-of-line on purpose: a description that merely CONTAINS the words
+#: ('Ver más fotos del auto') is left alone.
+_SHARE_TOGGLE_AT_EOL = re.compile(
+    r"(?:^|\s)ver\s+m[áa]s\s*$|(?:^|\s)ver\s+menos\s*$",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def _strip_toggle_labels(text: str) -> str:
+    """Drop the 'Ver más'/'Ver menos' UI control wherever it lands.
+
+    USER RULE (recording 20261007T022643Z_marketplace_inventory): the toggle
+    label is NEVER part of the description text — neither standalone nor
+    glued to the last line by the DOM. Lines that were nothing but the label
+    disappear; real blank lines (paragraph breaks) survive.
+    """
+    kept: list[str] = []
+    for line in str(text or "").split("\n"):
+        cleaned = _SHARE_TOGGLE_AT_EOL.sub("", line).strip()
+        if not cleaned and line.strip():
+            continue                      # the line WAS the toggle and nothing else
+        kept.append(cleaned)
+    return "\n".join(kept).strip()
+
+
 def _obj_field(obj, key: str, default: str = "") -> str:
     """One field off a Mapping OR an object (listings.ActiveListing is a
     TypedDict, tests hand plain dicts, share.py may hand a small dataclass)."""
@@ -1061,7 +1089,7 @@ async def fetch_listing_description(page: Page, cfg: Config, log: log_fn = print
         else:
             log("share: 'Ver más' stamped but not clickable — using the "
                 "collapsed text")
-    text = str(info.get("text") or "").strip()
+    text = _strip_toggle_labels(str(info.get("text") or ""))
     log(f"share: description for {listing_id or url} = {len(text)} chars")
     return text
 

@@ -265,9 +265,9 @@ def test_tag_ranks_duplicate_names():
 # ---------------- A1: fetch_listing_description ----------------
 
 
-def _desc(found=True, text="", has_more=False):
+def _desc(found=True, text="", has_more=False, has_less=False):
     return {"found": found, "text": text, "has_more": has_more,
-            "has_less": False}
+            "has_less": has_less}
 
 
 def test_fetch_description_with_ver_mas_clicks_once(monkeypatch, tmp_path):
@@ -311,6 +311,35 @@ def test_fetch_description_builds_item_url_from_id(monkeypatch, tmp_path):
     asyncio.run(fetch_listing_description(
         page, _cfg(tmp_path), lambda *_a: None, {"id": "999"}))
     assert page.gotos == ["https://www.facebook.com/marketplace/item/999/"]
+
+
+def test_fetch_description_drops_an_inline_toggle_label(monkeypatch, tmp_path):
+    """LIVE 2026-10-07 (poster.listings on the real item page): the block's
+    innerText carried the collapse control INLINE at the end of the seller
+    text — '... No se aceptan cambios Ver menos'. The recording's rule is
+    explicit: the label is NEVER part of the description."""
+    _listen(monkeypatch, tmp_path)
+    page = FakePage(js={fl._SHARE_DESC_JS: _desc(
+        text="🚙 NISSAN ROGUE 2017\n🚫 No se aceptan cambios Ver menos",
+        has_less=True)})
+    page.url = "https://www.facebook.com/marketplace/item/997052559461487"
+    out = asyncio.run(fetch_listing_description(
+        page, _cfg(tmp_path), lambda *_a: None, {"id": "997052559461487"}))
+    assert out == "🚙 NISSAN ROGUE 2017\n🚫 No se aceptan cambios"
+
+
+def test_strip_toggle_labels_covers_the_observed_shapes():
+    f = fl._strip_toggle_labels
+    assert f("texto Ver menos") == "texto"            # inline, end of text
+    assert f("texto Ver más") == "texto"
+    assert f("texto VER MAS") == "texto"              # accent-less spelling
+    assert f("texto\nVer menos") == "texto"           # alone on its own line
+    assert f("Ver más\ntexto") == "texto"
+    assert f("texto") == "texto"
+    # a description that merely CONTAINS the words is left untouched
+    assert f("Ver más fotos del auto") == "Ver más fotos del auto"
+    # intentional paragraph breaks survive
+    assert f("linea1\n\nlinea2") == "linea1\n\nlinea2"
 
 
 # ---------------- A2: open_share_hub ----------------
