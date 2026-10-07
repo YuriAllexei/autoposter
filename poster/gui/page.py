@@ -41,7 +41,7 @@ body {
   border:2px solid transparent; background-clip:content-box; }
 *::-webkit-scrollbar-thumb:hover { background:#334056; background-clip:content-box; }
 *::-webkit-scrollbar-track { background:transparent; }
-.wrap { max-width:1380px; margin:0 auto; }
+.wrap { max-width:1560px; margin:0 auto; }
 .mono { font-family:var(--mono); font-size:.92em; color:var(--ink2); }
 .note { color:var(--ink3); font-size:11.5px; margin-top:10px; }
 .err, .note.err { color:var(--bad); }
@@ -148,9 +148,19 @@ thead th.num { text-align:right; }
 tbody td { padding:8.5px 11px; border-bottom:1px solid rgba(148,163,184,.055);
   white-space:nowrap; }
 tbody td.name { white-space:normal; max-width:330px; }
-#listings td.desc { white-space:pre-wrap; max-width:26em; max-height:4.8em;
-  overflow:hidden; vertical-align:top; cursor:pointer; font-size:.92em; }
-#listings td.desc.open { max-height:none; }
+#listings td.desc { width:100%; min-width:24em; vertical-align:top;
+  cursor:pointer; font-size:.96em; line-height:1.7; padding-right:20px; }
+/* NB: max-height is IGNORED on a <td> — the clamp must live on a block
+   inside the cell, otherwise every row renders the whole description and
+   the click-to-expand is a no-op (found live 2026-10-07). */
+#listings td.desc .descinner { white-space:pre-wrap; max-height:11em;
+  overflow:hidden; }
+#listings td.desc.open .descinner { max-height:none; }
+#listings td.post { white-space:nowrap; }
+/* the card is full width now: trade padding + id/price glyph size for
+   description room so the seller text reads as prose, not a thin strip */
+#listings td, #listings th { padding-left:9px; padding-right:9px; }
+#listings td.mono { font-size:.86em; }
 tbody tr:hover td { background:rgba(122,162,255,.055); }
 tbody tr:last-child td { border-bottom:none; }
 td.num { text-align:right; font-variant-numeric:tabular-nums; }
@@ -294,7 +304,7 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
     <div class="note" id="groupsnote"></div>
   </div>
 
-  <div class="card">
+  <div class="card span2">
     <h2>Marketplace listings</h2>
     <div class="tablewrap"><table id="listings">
       <thead><tr><th>id</th><th>title</th><th>price</th><th>approved</th>
@@ -305,7 +315,7 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
     <div class="note" id="listingsnote"></div>
   </div>
 
-  <div class="card">
+  <div class="card span2">
     <h2>Run logs on disk</h2>
     <div class="tablewrap"><table id="logs">
       <thead><tr><th>file</th><th>modified</th><th class="num">bytes</th></tr></thead>
@@ -353,6 +363,10 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
 const $ = (id) => document.getElementById(id);
 let cursor = 0;          // next /api/log index to request
 let busy = false;
+// which listing descriptions the operator expanded — the table is rebuilt
+// from scratch on every poll (5s), so this state must live OUTSIDE the DOM
+// or an expanded description would snap shut mid-read.
+const expandedListings = new Set();
 
 function text(node, s) { node.textContent = (s === null || s === undefined) ? "" : String(s); }
 
@@ -473,12 +487,20 @@ function renderState(st) {
     td(tr, row.crossposts, "num");
     td(tr, row.crosspost_groups + (row.crosspost_coverage === null ? "" : " (" + row.crosspost_coverage + "%)"), "num");
     deliveredCell(tr, row);
-    // the seller's own description (fetched by poster.listings); click toggles
-    // the full text, the collapsed cell clamps it to a few lines via CSS.
-    const dcell = td(tr, row.description || "—");
-    dcell.className = "desc";
+    // the seller's own description (fetched by poster.listings); the clamp
+    // lives on an inner block (max-height on a <td> is ignored) and a click
+    // toggles the full text.
+    const dcell = td(tr, "", "desc");
+    const dtext = document.createElement("div");
+    dtext.className = "descinner";
+    dtext.textContent = row.description || "—";
+    dcell.appendChild(dtext);
     dcell.title = "click to expand / collapse";
-    dcell.onclick = () => dcell.classList.toggle("open");
+    if (expandedListings.has(row.id)) dcell.classList.add("open");
+    dcell.onclick = () => {
+      const open = dcell.classList.toggle("open");
+      if (open) expandedListings.add(row.id); else expandedListings.delete(row.id);
+    };
     // one pair per row: the SAME sequential pipeline, narrowed to this listing
     // (dry stages and closes the composer; LIVE needs .env + the typed phrase)
     const pcell = td(tr, "", "num");

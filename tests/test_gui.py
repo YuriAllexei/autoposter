@@ -791,8 +791,14 @@ def test_page_has_inventory_columns_and_per_listing_post():
     html = render_page()
     assert "<th>descripción</th>" in html and "<th>post</th>" in html
     assert "rowRun" in html and 'mode: "share-one"' in html
-    assert 'dcell.className = "desc"' in html
-    assert "#listings td.desc.open" in html          # the expand-on-click CSS
+    assert 'td(tr, "", "desc")' in html and "descinner" in html
+    # the clamp must sit on the inner block: max-height is ignored on a <td>,
+    # so a clamp there renders the whole description and the click does nothing
+    assert "#listings td.desc .descinner" in html
+    assert "#listings td.desc.open .descinner" in html
+    # expansion survives the 5s table rebuild (state kept outside the DOM)
+    assert "const expandedListings = new Set()" in html
+    assert "expandedListings.has(row.id)" in html
 
 
 def test_page_row_post_buttons_are_gated_like_the_global_ones():
