@@ -157,15 +157,21 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
    (success/failure/abort/crash all notify). Dry-run stages never count as
    published; `skipped` never counts. Webhook failure never changes rc. A real publish carries a best-effort `delivered` verdict
   (pending|live|unknown) — see verify_pending; it never gates the status.
-8. INDIVIDUAL SHARES (recording 20260925T014900Z + probe): card 'Compartir'
-   → hub 'Grupo' → 'Compartir en un grupo' dialog — its 'Todos los grupos'
-   page VIRTUALIZES at ~10 rows, so every group is reached by EXACT-NAME
-   typeahead in 'Buscar grupos' (two exact-name rows abort that share rather
-   than risk the wrong group) → composer ('Crea una publicación pública...'
-   variant, NOT 'Escribe algo') waits the link preview, pastes the listing's
-   OWN description verbatim (from the item page 'Descripcion del vendedor',
-   'Ver mas' expanded once if present) → dry = X-close + crossshare_staged
-   shot; the Publicar locator is never constructed on the dry path.
+8. INDIVIDUAL SHARES (recording 20260925T014900Z + probes): card 'Compartir'
+   → hub 'Grupo' → 'Compartir en un grupo' dialog → each group is addressed as
+   a ROW of that dialog's own list: scroll the list top→bottom, match folded
+   name + occurrence rank (`tag_row_identity`), click that row. The 'Buscar
+   grupos' typeahead is a FALLBACK only — it provably misses groups the list
+   offers (live 2026-10-07: 15/60 shares lost, 6 of them to searches that
+   returned only near-name rows for targets that ARE in the list). A list
+   holding a different number of rows with that name than the plan recorded
+   (`name_total`) FAILS that share instead of clicking a possible twin, and the
+   row's name is re-verified in the stamp before the click → composer ('Crea
+   una publicación pública...' variant, NOT 'Escribe algo') waits the link
+   preview, pastes the listing's OWN description verbatim (from the item page
+   'Descripcion del vendedor', 'Ver mas' expanded once if present) → dry =
+   X-close + crossshare_staged shot; the Publicar locator is never constructed
+   on the dry path.
 9. CROSSPOST TRACKING (user spec 2026-09-23): the batch plan is computed from
    the dialog's OWN group list each time it opens; the only memory is a set
    of already-batched group ids FOR THE CURRENT LISTING IN THE CURRENT RUN.
@@ -266,6 +272,15 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
   fresh trace recovery + live proof. 'Entire inventory' = the ACTIVE tab only;
   sold/expired/draft tabs need their own recording of the feed's state/status
   variables.
+- SHARE PICKER LIST (probe scripts/probe_share_rows.py, 2026-10-07): the
+  'Compartir en un grupo' dialog's list holds EVERY offerable group in the DOM
+  (~60 rows) — scrolling top→bottom mounts them all, the graphql payloads cap
+  at 10 per page, and the order is STABLE across opens (verified: 60/60 rows,
+  identical order, twice). So the LIST, not the typeahead, is how a group is
+  addressed; 'Buscar grupos' returns a relevance/prefix subset that omits real
+  targets. The dialog is READY when the search box + its rows exist — waiting
+  for the graphql answer instead cost 4 hub opens in the 2026-10-07 live run
+  (a click landing mid-transition can leave no dialog at all).
 
 ## Adding groups
 
