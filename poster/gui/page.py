@@ -210,6 +210,29 @@ pre#log { background:#070a10; border:1px solid var(--line); border-radius:12px;
   font:12.3px/1.65 var(--mono); color:#9fb2ca; white-space:pre-wrap;
   word-break:break-word; }
 label[for=autoscroll] { font-size:12px; color:var(--ink2); }
+
+/* ---------- groups matrix modal ---------- */
+.modal { position:fixed; inset:0; z-index:40; display:flex; align-items:center;
+  justify-content:center; padding:20px; background:rgba(4,6,10,.66);
+  backdrop-filter:blur(3px); }
+.modalbox { width:min(46em,92vw); max-height:82vh; display:flex;
+  flex-direction:column; padding:15px 17px;
+  background:linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--line2); border-radius:15px;
+  box-shadow:0 18px 48px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.03); }
+.modalhead { display:flex; align-items:center; justify-content:space-between;
+  gap:12px; margin-bottom:11px; }
+.modalhead b { font-size:12.5px; font-weight:700; letter-spacing:.02em; }
+.modalhead span { color:var(--ink3); font-size:11.5px; }
+.modalbody { overflow:auto; flex:1 1 auto; margin:0 -4px; padding:0 4px; }
+.matrixrow { display:flex; align-items:center; gap:9px; padding:6px 8px;
+  border-radius:9px; cursor:pointer; color:var(--ink); font-size:12.8px; }
+.matrixrow:hover { background:rgba(122,162,255,.055); }
+.matrixrow input { accent-color:var(--acc); flex:none; }
+.modalfoot { display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+  margin-top:12px; padding-top:11px; border-top:1px solid var(--line); }
+.modalfoot .cnt { color:var(--ink2); font-size:11.5px; margin-right:auto; }
+.matrix-btn { padding:4px 9px; font-size:11px; }
 </style>
 </head>
 <body>
@@ -367,6 +390,9 @@ let busy = false;
 // from scratch on every poll (5s), so this state must live OUTSIDE the DOM
 // or an expanded description would snap shut mid-read.
 const expandedListings = new Set();
+// the latest /api/state snapshot: the groups-matrix modal reads the joined
+// groups + per-listing matrix from here when the operator opens it
+let lastState = null;
 
 function text(node, s) { node.textContent = (s === null || s === undefined) ? "" : String(s); }
 
@@ -432,6 +458,7 @@ function statBox(value, label) {
 }
 
 function renderState(st) {
+  lastState = st;
   const ident = st.identity || {};
   const envDry = ident.env_dry_run !== false;
   text($("ident"), "as " + (ident.label || "?") + (ident.post_as ? " (" + ident.post_as + ")" : ""));
@@ -512,6 +539,21 @@ function renderState(st) {
       b.onclick = () => rowRun(row.id, wantLive);
       pcell.appendChild(b);
     }
+    // groups matrix: one extra button per row opening a checkbox panel where
+    // the operator switches individual joined groups OFF for THIS listing.
+    // row.matrix is built by the server; before the backend lands it is
+    // absent and the label degrades to a plain 'groups matrix'.
+    const mb = document.createElement("button");
+    mb.className = "ghost matrix-btn";
+    let mlabel = "groups matrix";
+    if (row.matrix && row.matrix.rows) {
+      const total = row.matrix.rows.length;
+      const on = total - (row.matrix.disabled || 0);
+      mlabel = "groups matrix (" + on + "/" + total + ")";
+    }
+    text(mb, mlabel);
+    mb.onclick = () => openMatrix(row.id);
+    pcell.appendChild(mb);
   }, l.available ? "listings snapshot is empty (confirmed 0 active listings)"
                  : "not fetched yet — no listings.json on disk");
   text($("listingsnote"),
@@ -636,6 +678,157 @@ function note(message) {
   const span = document.createElement("span");
   span.textContent = message;
   target.appendChild(span);
+}
+
+// ---- groups matrix modal: switch joined groups OFF per listing ----
+// Group names come from Facebook and are hostile by assumption: every label
+// is built with createElement/textContent, never innerHTML, and the page
+// NEVER folds names itself — the server's own folded `key` values are what
+// travel back to /api/group-matrix.
+let matrixModal = null;
+
+function matrixListing(listingId) {
+  const l = (lastState && lastState.listings) || {};
+  return (l.rows || []).find((r) => String(r.id) === String(listingId)) || null;
+}
+
+function closeMatrix() {
+  if (!matrixModal) return;
+  document.removeEventListener("keydown", matrixModal.onKey, true);
+  const root = matrixModal.root;
+  if (root && root.parentNode) root.parentNode.removeChild(root);
+  matrixModal = null;
+}
+
+function openMatrix(listingId) {
+  closeMatrix();                     // never stack two panels
+  const listing = matrixListing(listingId);
+  const g = (lastState && lastState.groups) || {};
+
+  const root = document.createElement("div");
+  root.className = "modal";
+  root.onclick = (ev) => { if (ev.target === root) closeMatrix(); };
+  const box = document.createElement("div");
+  box.className = "modalbox";
+  root.appendChild(box);
+
+  const head = document.createElement("div");
+  head.className = "modalhead";
+  const headl = document.createElement("div");
+  const hb = document.createElement("b");
+  text(hb, "groups matrix");
+  headl.appendChild(hb);
+  const hs = document.createElement("span");
+  text(hs, " · " + (listing ? (listing.title || listingId)
+                             : ("listing " + listingId)));
+  headl.appendChild(hs);
+  head.appendChild(headl);
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "ghost";
+  text(closeBtn, "close");
+  closeBtn.onclick = closeMatrix;
+  head.appendChild(closeBtn);
+  box.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "modalbody";
+  box.appendChild(body);
+
+  const foot = document.createElement("div");
+  foot.className = "modalfoot";
+  const counter = document.createElement("span");
+  counter.className = "cnt";
+  foot.appendChild(counter);
+  box.appendChild(foot);
+
+  const onKey = (ev) => {
+    if (ev.key === "Escape") { ev.preventDefault(); closeMatrix(); }
+  };
+
+  if (!g.available) {
+    const n = document.createElement("div");
+    n.className = "note";
+    text(n, "no joined-groups snapshot yet - press Refresh groups, " +
+            "then reopen this panel");
+    body.appendChild(n);
+    text(counter, "");
+    document.body.appendChild(root);
+    document.addEventListener("keydown", onKey, true);
+    matrixModal = { root: root, onKey: onKey };
+    return;
+  }
+
+  // local truth while the panel is open: the checkbox states and this Set
+  // survive the 5s state re-render (which never touches the modal), so an
+  // open panel is never closed or reshuffled by a poll.
+  const mrows = (listing && listing.matrix && listing.matrix.rows) || [];
+  const disabled = new Set();
+  for (const mr of mrows) if (mr.disabled) disabled.add(mr.key);
+  const inputs = [];
+
+  const refreshCounter = () => {
+    let on = 0;
+    for (const inp of inputs) if (inp.checked) on++;
+    text(counter, on + " of " + inputs.length + " group(s) ON");
+  };
+  const save = () => {
+    // the FULL disabled set replaces the server's for this listing; the keys
+    // are the server's own folded values, never re-derived here.
+    post("/api/group-matrix",
+         { listing_id: String(listingId), disabled: Array.from(disabled) })
+      .catch((e) => note("matrix save failed: " + e.message));
+  };
+
+  for (const mr of mrows) {
+    const lbl = document.createElement("label");
+    lbl.className = "matrixrow";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !mr.disabled;                 // checked = group is ON
+    cb.onchange = () => {
+      if (cb.checked) disabled.delete(mr.key); else disabled.add(mr.key);
+      refreshCounter();
+      save();
+    };
+    lbl.appendChild(cb);
+    const nm = document.createElement("span");
+    text(nm, mr.name + ((mr.count || 0) > 1 ? " (" + mr.count + " groups)" : ""));
+    lbl.appendChild(nm);
+    body.appendChild(lbl);
+    inputs.push(cb);
+  }
+  if (!mrows.length) {
+    const n = document.createElement("div");
+    n.className = "note";
+    text(n, "no joined groups to switch for this listing");
+    body.appendChild(n);
+  }
+
+  const allBtn = document.createElement("button");
+  allBtn.className = "ghost";
+  text(allBtn, "all");
+  allBtn.onclick = () => {
+    for (const mr of mrows) disabled.delete(mr.key);
+    for (const inp of inputs) inp.checked = true;
+    refreshCounter();
+    save();
+  };
+  const noneBtn = document.createElement("button");
+  noneBtn.className = "ghost";
+  text(noneBtn, "none");
+  noneBtn.onclick = () => {
+    for (const mr of mrows) disabled.add(mr.key);
+    for (const inp of inputs) inp.checked = false;
+    refreshCounter();
+    save();
+  };
+  foot.appendChild(allBtn);
+  foot.appendChild(noneBtn);
+
+  refreshCounter();
+  document.body.appendChild(root);
+  document.addEventListener("keydown", onKey, true);
+  matrixModal = { root: root, onKey: onKey };
 }
 
 function run(mode, live) {
