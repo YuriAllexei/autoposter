@@ -292,8 +292,10 @@ def _install_share(monkeypatch, fake, sleeps, tmp_path):
     monkeypatch.setattr(sh.fl, "fetch_listing_description", fake.desc)
     monkeypatch.setattr(sh.fl, "discover_share_groups", fake.discover)
     monkeypatch.setattr(sh.fl, "dismiss_share_dialogs", fake.dismiss)
-    # never write the real .local-capture cache from a test
+    # never read/write the real .local-capture from a test: the targets cache
+    # AND the dashboard's groups matrix both anchor there in production.
     monkeypatch.setattr(sh, "TARGETS_CACHE", tmp_path / "share_targets.json")
+    monkeypatch.setattr(sh, "MATRIX_ROOT", tmp_path)
 
 
 def _listing(lid="L1", title="Tahoe"):
@@ -684,3 +686,102 @@ def test_filter_groups_accepts_a_repeated_flag_list():
 def test_cli_group_flag_accumulates():
     ns = sh._cli(["--dry-run", "--group", "a", "--group", "b"])
     assert ns.group == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# groups matrix — per-listing OFF groups are skipped (poster.groups_matrix)
+# ---------------------------------------------------------------------------
+
+from poster import groups_matrix as gm
+
+#: a real-shaped listing id (all digits) — save_matrix rejects anything else
+LID = "1178670714486639"
+
+
+def test_matrix_disabled_group_never_reaches_the_picker(tmp_path, monkeypatch):
+    """A group the operator switched OFF in the dashboard must never be
+    addressed by fl.pick_share_group, and the review plan lists only the rest."""
+    fake, sleeps = FakeShare(), []
+    _install_share(monkeypatch, fake, sleeps, tmp_path)
+    gm.save_matrix(tmp_path, LID, ["JUAREZ AUTOS"])          # g2 switched OFF
+    cfg = _cfg(tmp_path)
+    rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
+    logs: list[str] = []
+    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(LID),
+                                   logs.append, {}, set(), is_last_listing=True))
+    assert n == 1
+    assert fake.picks == [("g1", 0)]                        # g2 never addressed
+    assert any("matrix: 1 group(s) switched OFF" in m for m in logs)
+    header = next(i for i, m in enumerate(logs) if "PLAN for" in m)
+    assert "1 group(s)" in logs[header]
+    assert "JUAREZ AUTOS" not in "".join(logs[header:])     # not in the review
+
+
+def test_matrix_folds_case_and_whitespace_to_skip_the_group(
+        tmp_path, monkeypatch):
+    """The operator's checkbox text need not match byte-for-byte: the matrix
+    folds both sides (NFC + collapsed whitespace + casefold)."""
+    fake, sleeps = FakeShare(), []
+    _install_share(monkeypatch, fake, sleeps, tmp_path)
+    gm.save_matrix(tmp_path, LID, ["juarez   autos"])       # lower + extra ws
+    cfg = _cfg(tmp_path)
+    rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
+    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(LID),
+                                   print, {}, set(), is_last_listing=True))
+    assert n == 1 and fake.picks == [("g1", 0)]
+
+
+def test_no_matrix_file_is_fail_safe_posts_the_whole_plan(
+        tmp_path, monkeypatch):
+    """No matrix file at all => everything enabled (fail-safe default)."""
+    fake, sleeps = FakeShare(), []
+    _install_share(monkeypatch, fake, sleeps, tmp_path)
+    # tmp_path/config/group_matrix.json is never written
+    cfg = _cfg(tmp_path)
+    rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
+    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(LID),
+                                   print, {}, set(), is_last_listing=True))
+    assert n == 2
+    assert fake.picks == [("g1", 0), ("g2", 0)]
+
+
+def test_matrix_unknown_names_are_kept(tmp_path, monkeypatch):
+    """A matrix entry naming groups the picker does not offer, or a listing
+    with no entry, must not shrink the plan (fail-safe direction)."""
+    fake, sleeps = FakeShare(), []
+    _install_share(monkeypatch, fake, sleeps, tmp_path)
+    gm.save_matrix(tmp_path, LID, ["SOME OTHER GROUP"])          # matches none
+    gm.save_matrix(tmp_path, "9999999999999999", ["JUAREZ AUTOS"])  # other list
+    cfg = _cfg(tmp_path)
+    rec = RunRecorder(ledger_path=cfg.ledger_file, run_id="R", dry_run=True)
+    n = asyncio.run(sh.run_listing(FakePage(), cfg, rec, _listing(LID),
+                                   print, {}, set(), is_last_listing=True))
+    assert n == 2 and fake.picks == [("g1", 0), ("g2", 0)]
+
+
+def test_list_mode_applies_the_matrix_and_logs_dropped(
+        tmp_path, monkeypatch, capsys):
+    """--list must show what a run would do: the OFF group is dropped from the
+    `picker offers` line, with the dropped count logged."""
+    gm.save_matrix(tmp_path, LID, ["JUAREZ AUTOS"])
+    rc, _fake, _cfg, _ = _run_main_async(
+        tmp_path, monkeypatch,
+        feed=[{"id": LID, "title": "Tahoe", "price": "$1"}], list=True)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "picker offers 1 group(s)" in out
+    assert "matrix: 1 group(s) switched OFF" in out
+
+
+def test_filter_plan_composition_over_disabled_for(tmp_path):
+    """The pure seam: disabled_for -> filter_plan drops exactly the folded OFF
+    names and keeps the rest, and is a true no-op when nothing is disabled."""
+    plan = [{"id": "g1", "name": "VENTAS CUAUHTEMOC"},
+            {"id": "g2", "name": "JUAREZ AUTOS"}]
+    gm.save_matrix(tmp_path, LID, ["juarez autos"])
+    disabled = gm.disabled_for(tmp_path, LID)
+    kept, dropped = gm.filter_plan(plan, disabled)
+    assert [g["id"] for g in kept] == ["g1"]
+    assert [g["id"] for g in dropped] == ["g2"]
+    same, none = gm.filter_plan(plan, set())
+    assert same is plan and none == []

@@ -9,6 +9,10 @@ list offers), stages the composer with the listing link attached plus the
 listing description pasted 1:1, then stages (dry) or publishes (live) that
 single share. N listings x M groups = N*M shares, uncapped unless --max.
 
+Groups the operator switched OFF for a listing in the dashboard's "groups
+matrix" (poster.groups_matrix) are dropped from that listing's plan before
+anything is staged or published, so the reviewed plan is exactly what posts.
+
 Skeleton copied from poster/crosspost.py (argparse flags, identity ritual,
 fetch_active_listings, AP_DRY_RUN fail-safe, Discord in `finally`).
 
@@ -31,6 +35,7 @@ from playwright.async_api import Error as PWError
 from playwright.async_api import async_playwright
 
 from . import flows as fl
+from . import groups_matrix as gm
 from .config import Config, load_config
 from .fb import adopt_identity, launch
 from .flows import FlowError, human_sleep
@@ -43,6 +48,10 @@ ITEM_URL = "https://www.facebook.com/marketplace/item/{}/"
 #: last picker contents, seen by the most recent hub open. Written by THIS
 #: module (flows stays I/O-free) and shown by --list as the groups column.
 TARGETS_CACHE = Path(".local-capture/gui/share_targets.json")
+#: root that holds the dashboard's groups matrix (`config/group_matrix.json`).
+#: Repo-relative like TARGETS_CACHE: inside the container cwd=/app, so both the
+#: dashboard and this pipeline resolve the same file. Tests monkeypatch it.
+MATRIX_ROOT = Path(".local-capture")
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +201,11 @@ async def run_listing(page, cfg: Config, recorder: RunRecorder, listing: dict,
         return 0
     write_targets_cache(listing, picker, log)
     plan = filter_groups(picker, only_group)
+    disabled = gm.disabled_for(MATRIX_ROOT, lid)
+    plan, muted = gm.filter_plan(plan, disabled)
+    if muted:
+        log(f"[share] matrix: {len(muted)} group(s) switched OFF for this "
+            f"listing -> {len(plan)} of {len(plan) + len(muted)}")
     todo = [g for g in plan if (lid, str(g["id"])) not in done]
     if not todo:
         return 0
@@ -341,6 +355,12 @@ async def main_async(cfg: Config, args) -> int:
                         log(f"[share] {lst['title'][:40]!r}: picker failed ({e})")
                         continue
                     shown = filter_groups(picker, args.group)
+                    shown, muted = gm.filter_plan(
+                        shown, gm.disabled_for(MATRIX_ROOT, lst["id"]))
+                    if muted:
+                        log(f"[share] matrix: {len(muted)} group(s) switched "
+                            f"OFF for this listing -> {len(shown)} of "
+                            f"{len(shown) + len(muted)}")
                     log(f"[share] {lst['title'][:44]!r}: picker offers "
                         f"{len(shown)} group(s)")
                     for g in shown:
@@ -385,6 +405,8 @@ def _cli(argv: list[str] | None = None) -> argparse.Namespace:
                     "picker offers, individually (listing -> Compartir -> Grupo -> "
                     "row pick -> composer -> description): every listing x "
                     "every group = its own share, one dialog at a time. "
+                    "Groups switched OFF per listing in the dashboard's "
+                    "groups matrix are skipped. "
                     "Dry-run stages each composer then closes it — nothing is "
                     "ever submitted.")
     ap.add_argument("--dry-run", action="store_true",
