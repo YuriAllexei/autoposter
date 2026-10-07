@@ -52,6 +52,13 @@ other big ids in the dump are edges[].node.id (the listing-SET id
 1107451905593250) and post_id / product_item_override.id (28736573965937248),
 neither of which is a marketplace listing id.
 """
+
+#: description fetch (recording 20261007T022643Z_marketplace_inventory): the item
+#: page layout is unchanged — 'Descripción del vendedor' + one 'Ver más' click —
+#: so attach_descriptions() REUSES the proven flows.fetch_listing_description
+#: instead of new selectors. (The same text also rides the item page's
+#: MarketplacePDPContainerQuery payload as redacted_description.text,
+#: doc_id 28944633605130422 — unpinned, do not switch without fresh proof.)
 from __future__ import annotations
 
 import argparse
@@ -65,7 +72,9 @@ from typing import Any, TypedDict
 
 from playwright.async_api import Page
 
+from . import flows as fl
 from .config import Config
+from .flows import human_sleep
 
 # ---- pinned provenance (re-verify against a fresh recording, never blind-edit)
 
@@ -382,6 +391,41 @@ def save_listings_snapshot(cfg: Config, listings: list[ActiveListing],
     if log:
         log(f"listings: snapshot saved -> {out}")
     return out
+
+
+async def attach_descriptions(page, cfg: Config, listings: list,
+                              log: Callable[[str], None] | None = None,
+                              *, fetch_desc=None) -> list:
+    """Stamp each listing's OWN seller description onto its row (1:1 verbatim),
+    reusing the PROVEN item-page ritual from flows (recording
+    20261007T022643Z: 'Descripción del vendedor' + one 'Ver más' click).
+
+    One page visit per listing, ACTION-category human_sleep between them
+    (AP_CROSSPOST_ACTION_*, 1-3s — these are page transitions, not group
+    switches). A failing item page NEVER kills the refresh: that row keeps
+    description "" and the run continues; the snapshot is re-saved either way
+    so the dashboard shows what we have.
+
+    The browser-free test seam is `fetch_desc` — production never passes it.
+    """
+    def _log(message: str) -> None:
+        if log:
+            log(message)
+
+    fetch = fetch_desc or fl.fetch_listing_description
+    for lst in listings:
+        await human_sleep(cfg, _log, "before item page",
+                          cfg.crosspost_action_min, cfg.crosspost_action_max)
+        try:
+            text = await fetch(page, cfg, _log, lst)
+        except Exception as e:  # noqa: BLE001 — one broken item page must not lose the feed
+            _log(f"listings: description for {str(lst.get('title') or lst.get('id'))[:40]!r} "
+                 f"unavailable ({type(e).__name__}: {str(e)[:120]}) — keeping the row "
+                 "without it")
+            text = ""
+        lst["description"] = str(text or "").strip()
+    save_listings_snapshot(cfg, listings, _log)
+    return listings
 
 
 async def _wait_tokens(page: Page, timeout_ms: int = 20000) -> dict:

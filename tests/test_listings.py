@@ -318,3 +318,56 @@ def test_extract_rows_carry_an_empty_description_field():
                       None, False)
     rows, _info = extract_active_listings(parse_graphql_body(body))
     assert rows[0]["description"] == ""
+
+
+def _desc_rows():
+    return [{"id": TAHOE, "title": "Tahoe", "price": "$1", "approved": True,
+             "rejected": False, "description": ""},
+            {"id": SECOND, "title": "Rogue", "price": "$2", "approved": True,
+             "rejected": False, "description": ""}]
+
+
+async def _no_sleep(*args, **kwargs):
+    return None
+
+
+def test_attach_descriptions_fills_rows_and_resaves(tmp_path, monkeypatch):
+    from poster import listings as listings_mod
+    monkeypatch.setattr(listings_mod, "human_sleep", _no_sleep)
+    cfg = _cfg(tmp_path)
+    rows = _desc_rows()
+    seen: list[str] = []
+
+    async def fake_fetch(page, cfg, log, listing):
+        seen.append(listing["id"])
+        return "  line one\nline two  "
+
+    out = asyncio.run(listings_mod.attach_descriptions(
+        None, cfg, rows, fetch_desc=fake_fetch))
+    assert seen == [TAHOE, SECOND]
+    assert out[0]["description"] == "line one\nline two"
+    saved = json.loads(snapshot_path(cfg).read_text(encoding="utf-8"))
+    assert saved[0]["description"] == "line one\nline two"
+    assert saved[1]["description"] == "line one\nline two"
+
+
+def test_attach_keeps_every_row_when_one_description_fails(tmp_path, monkeypatch):
+    from poster import listings as listings_mod
+    from poster.flows import FlowError
+    monkeypatch.setattr(listings_mod, "human_sleep", _no_sleep)
+    cfg = _cfg(tmp_path)
+    rows = _desc_rows()
+    msgs: list[str] = []
+
+    async def flaky(page, cfg, log, listing):
+        if listing["id"] == SECOND:
+            raise FlowError("section never rendered")
+        return "good text"
+
+    out = asyncio.run(listings_mod.attach_descriptions(
+        None, cfg, rows, log=msgs.append, fetch_desc=flaky))
+    assert out[0]["description"] == "good text"
+    assert out[1]["description"] == ""
+    assert any("unavailable" in m for m in msgs)
+    saved = json.loads(snapshot_path(cfg).read_text(encoding="utf-8"))
+    assert len(saved) == 2
