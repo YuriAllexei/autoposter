@@ -850,6 +850,64 @@ def test_live_server_rejects_unknown_mode(live_server):
     assert manager.status()["running"] is False
 
 
+def test_live_server_rejects_a_dirty_listing_argument(live_server):
+    """Only the rejection path is exercised over HTTP: this fixture's manager
+    has a REAL python, so a valid dry /api/run would spawn the poster.share
+    browser pipeline inside the test run."""
+    base, manager, _buffer = live_server
+    status, data = _post(base + "/api/run", {"mode": "share-one", "live": False,
+                                             "listing": "rm -rf"})
+    assert status == 400 and "listing" in data["error"]
+    assert manager.status()["running"] is False        # refused before any spawn
+
+
+def test_run_endpoint_forwards_the_listing_to_the_manager(tmp_path):
+    """/api/run -> _run -> _spawn -> Dashboard.start -> manager.start: the
+    listing must survive every hop. A stub manager proves the plumbing without
+    spawning anything (the real fixture would launch poster.share)."""
+    calls: list[tuple] = []
+
+    class StubManager:
+        buffer = RingBuffer()
+
+        def status(self):
+            return {"running": False, "mode": None, "live": False, "pid": None,
+                    "started": None, "rc": None, "command": []}
+
+        def available(self):
+            return {mode: True for mode in MODE_SPECS}
+
+        def start(self, mode, live=False, listing=None):
+            calls.append((mode, live, listing))
+            return {"mode": mode, "live": live, "pid": 1234}
+
+    httpd = create_server(GuiPaths.from_root(tmp_path), StubManager(),  # type: ignore[arg-type]
+                          IDENTITY, port=0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        status, data = _post(base + "/api/run", {"mode": "share-one", "live": False,
+                                                 "listing": L1})
+        assert status == 202 and data["pid"] == 1234
+        status, _data = _post(base + "/api/run", {"mode": "groups", "live": False})
+        assert status == 202
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(5)
+    assert calls == [("share-one", False, L1), ("groups", False, None)]
+
+
+def test_share_one_gates_live_before_spawning():
+    """The live gate is the same one every pipeline uses: a share-one request
+    without the typed phrase never reaches the spawn."""
+    assert live_confirmation_error({"mode": "share-one", "live": True}) is not None
+    assert live_confirmation_error({"mode": "share-one", "live": True,
+                                    "confirm": "PUBLICAR"}) is None
+    assert live_confirmation_error({"mode": "share-one", "live": False}) is None
+
+
 def test_live_server_surfaces_a_missing_cli_as_501(live_server):
     """cli_probe is stubbed False in this fixture, mirroring the current repo:
     poster.listings has no `__main__` guard, so there is no listings CLI to

@@ -200,6 +200,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _run(self, payload: dict[str, Any]) -> None:
         mode = str(payload.get("mode") or "")
         live = bool(payload.get("live"))
+        # raw pass-through only — the ONE validator for the id lives in
+        # runner.build_command (and the spawn never uses a shell).
+        listing = str(payload.get("listing") or "").strip() or None
         spec = MODE_SPECS.get(mode)
         if live and spec is not None and not spec["live_allowed"]:
             # No live variant of this mode exists (e.g. 'share'). Reject with
@@ -217,11 +220,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # allowed to publish without the typed confirmation phrase.
             self._send_json({"error": reason}, HTTPStatus.FORBIDDEN)
             return
-        self._spawn(mode, live=live)
+        self._spawn(mode, live=live, listing=listing)
 
-    def _spawn(self, mode: str, live: bool) -> None:
+    def _spawn(self, mode: str, live: bool,
+               listing: str | None = None) -> None:
         try:
-            started = self.dashboard.start(mode, live)
+            started = self.dashboard.start(mode, live, listing=listing)
         except RunBusy as e:
             self._send_json({"error": str(e), "busy": True},
                             HTTPStatus.CONFLICT)
@@ -255,8 +259,9 @@ class Dashboard:
         data["modes"] = manager_status["available"]
         return data
 
-    def start(self, mode: str, live: bool) -> dict[str, Any]:
-        return self.manager.start(mode, live)
+    def start(self, mode: str, live: bool,
+              listing: str | None = None) -> dict[str, Any]:
+        return self.manager.start(mode, live, listing=listing)
 
     def kill(self) -> bool:
         return self.manager.kill()
