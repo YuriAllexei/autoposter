@@ -195,3 +195,39 @@ def test_share_payload_abort_and_dry_footer():
     assert "**⛔ Run aborted:** joined-groups fetch failed" in e["description"]
     assert e["color"] == 0xE74C3C
     assert "DRY RUN" in e["footer"]["text"]
+
+
+def test_share_payload_names_every_group_on_a_single_car_run():
+    """The dashboard's per-listing button runs poster.share for ONE car; the
+    aggregate line alone would hide which groups it reached, so a one-listing
+    run reports per group exactly like the text pipeline's embed does."""
+    from poster.notify import build_share_payload
+    rows = [_share_row("L1", "2017 Nissan Rogue", "1", "published",
+                       delivered="pending"),
+            _share_row("L1", "2017 Nissan Rogue", "2", "published",
+                       delivered="live"),
+            _share_row("L1", "2017 Nissan Rogue", "3", "failed",
+                       "flow_error: composer never opened")]
+    s = _share_summary(shares=rows, dry_run=False, published=2, staged=0,
+                       failed=1, attempted=3)
+    desc = build_share_payload(s)["embeds"][0]["description"]
+    assert "✅ 2017 Nissan Rogue — 2 published" in desc      # headline stays
+    assert "✅ GRUPO 1 · ⏳ pending admin review" in desc
+    assert "✅ GRUPO 2 · 🟢 visible" in desc
+    assert "❌ GRUPO 3 — `flow_error: composer never opened`" in desc
+    assert desc.count("GRUPO 3") == 1        # not repeated by the failure block
+
+
+def test_share_payload_caps_the_group_lines_of_a_single_car_run():
+    from poster.notify import MAX_SHARE_DETAIL_LINES, build_share_payload
+    rows = [_share_row("L1", "Rogue", str(n), "staged") for n in range(40)]
+    s = _share_summary(shares=rows, dry_run=True, staged=40, attempted=40)
+    desc = build_share_payload(s)["embeds"][0]["description"]
+    assert f"+ {40 - MAX_SHARE_DETAIL_LINES} more" in desc
+    assert desc.count("🧪 GRUPO") == MAX_SHARE_DETAIL_LINES
+
+
+def test_share_payload_never_explodes_for_multi_car_runs():
+    from poster.notify import build_share_payload
+    desc = build_share_payload(_share_summary())["embeds"][0]["description"]
+    assert "GRUPO 0" not in desc      # 3 listings x 40 groups stays aggregate

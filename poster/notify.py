@@ -151,8 +151,35 @@ def build_share_payload(summary: dict, profile_name: str = "") -> dict:
             lines.append(f"✅ {agg['title']} — {agg['ok']} published"
                          f"{verdicts.get(str(agg['delivered'] or ''), '')}")
 
-    bad_rows = [r for r in summary.get("shares", [])
-                if r["status"] in (STATUS_FAILED, STATUS_SKIPPED)]
+    # ONE-listing run (the dashboard's per-listing button, or `--listing X`):
+    # name every group — the aggregate line alone hides where the car landed,
+    # and this is the shape the operator watches when posting a single car.
+    single_listing = len(per) == 1
+    if single_listing:
+        only = next(iter(per))
+        rows = [r for r in summary.get("shares", [])
+                if str(r["listing_id"]) == only]
+        marks = {STATUS_PUBLISHED: "✅", STATUS_STAGED: "🧪",
+                 STATUS_FAILED: "❌", STATUS_SKIPPED: "⏭️"}
+        for r in rows[:MAX_SHARE_DETAIL_LINES]:
+            name = str(r["group_name"])[:60]
+            mark = marks.get(r["status"], "•")
+            if r["status"] == STATUS_PUBLISHED:
+                lines.append(f"{mark} {name}"
+                             f"{verdicts.get(str(r.get('delivered') or ''), '')}")
+            elif r["status"] == STATUS_STAGED:
+                lines.append(f"{mark} {name}")
+            else:
+                lines.append(f"{mark} {name} — `{str(r.get('error') or '')[:90]}`")
+        if len(rows) > MAX_SHARE_DETAIL_LINES:
+            lines.append(f"+ {len(rows) - MAX_SHARE_DETAIL_LINES} more")
+
+    # multi-listing runs keep the aggregate shape; a single-listing run has
+    # already named every group above (and its failures with them), so the
+    # failure block below would only duplicate those lines.
+    bad_rows = [] if single_listing else [
+        r for r in summary.get("shares", [])
+        if r["status"] in (STATUS_FAILED, STATUS_SKIPPED)]
     for r in bad_rows[:MAX_SHARE_DETAIL_LINES]:
         where = f"{str(r['listing_title'])[:40]} · {str(r['group_name'])[:40]}"
         if r["status"] == STATUS_FAILED:
