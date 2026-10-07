@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .. import groups_matrix
 from ..results import (
     STATUS_FAILED,
     STATUS_SKIPPED,
@@ -502,12 +503,65 @@ def _name_of(rows: list[dict[str, Any]], group_id: str) -> str:
     return group_id
 
 
+def matrix_rows_for(group_rows: list[dict], disabled: set[str]) -> list[dict]:
+    """One listing's checkbox view: one entry per DISTINCT folded joined name.
+
+    Duplicate joined names collapse into ONE checkbox because the share picker
+    cannot tell those twins apart by name either; `count` surfaces the collapse.
+    Folded HERE so the page ships no folding of its own — the browser only ever
+    echoes back the server's own `key` values.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for group in group_rows:
+        if not isinstance(group, dict):
+            continue
+        name = str(group.get("name") or "").strip()
+        key = groups_matrix.fold_name(name)
+        if key in seen:
+            seen[key]["count"] += 1
+            continue
+        seen[key] = {"key": key, "name": name or key, "count": 1,
+                     "disabled": key in disabled}
+    return sorted(seen.values(), key=lambda r: r["name"].casefold())
+
+
+def read_matrix_view(paths: GuiPaths) -> dict[str, Any]:
+    """The store as the page wants it: {'available','path','updated_at','error',
+    'listings'}.
+
+    `available` is False ONLY when the file exists but cannot be read (the
+    reader's `error` note) — a store that was simply never written is available
+    and empty, because that is the legitimate 'everything is ON' default.
+    Disabled names are re-folded here so a hand-edited file with raw names still
+    matches the folded keys the page round-trips to /api/group-matrix.
+    """
+    view = groups_matrix.read_matrix(paths.capture_root)
+    listings = {
+        lid: {"disabled": sorted({groups_matrix.fold_name(name)
+                                  for name in entry.get("disabled", [])})}
+        for lid, entry in view["listings"].items()
+    }
+    return {
+        "available": "error" not in view,
+        "path": view["path"],
+        "updated_at": view["updated_at"],
+        "error": view.get("error"),
+        "listings": listings,
+    }
+
+
 def build_state(paths: GuiPaths, identity: dict[str, Any] | None = None,
                 manager_status: dict[str, Any] | None = None) -> dict[str, Any]:
     """The whole dashboard payload from disk only (no browser, no subprocess)."""
     identity = identity or {}
     groups = read_groups(paths)
     listings = read_listings(paths)
+    # Read the matrix ONCE per poll; its per-listing disabled sets are then
+    # joined against the (equally fresh) groups snapshot so a Refresh groups run
+    # shows up in every listing's checkbox list with the new groups ON.
+    matrix_view = read_matrix_view(paths)
+    matrix_by_listing = {lid: set(entry["disabled"])
+                         for lid, entry in matrix_view["listings"].items()}
     ledger_exists = paths.ledger.is_file()
     lines = read_ledger(paths.ledger)
     last = last_attempt_ts(paths.ledger)
@@ -550,6 +604,11 @@ def build_state(paths: GuiPaths, identity: dict[str, Any] | None = None,
             if total_groups else None)
         row["last_ts"] = cov.get("last_ts", "")
         row["last_status"] = cov.get("last_status", "never")
+        # the per-listing checkbox view, folded server-side (called ONCE)
+        rows_m = matrix_rows_for(groups["rows"],
+                                 matrix_by_listing.get(row["id"], set()))
+        row["matrix"] = {"rows": rows_m,
+                         "disabled": sum(1 for r in rows_m if r["disabled"])}
 
     recent = [line.to_dict() for line in lines[-RECENT_LEDGER_LIMIT:]][::-1]
     return {
@@ -560,6 +619,7 @@ def build_state(paths: GuiPaths, identity: dict[str, Any] | None = None,
                   "groups": groups.get("source") or str(paths.groups_dir)},
         "identity": identity,
         "groups": groups,
+        "matrix": matrix_view,
         "listings": listings,
         "rotation": rotation,
         "share": {"available": bool(by_share),
