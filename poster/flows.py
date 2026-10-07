@@ -1480,6 +1480,13 @@ _PICKER_OPEN_JS = r"""
 #: share.
 PICKER_SCAN_MAX_STEPS = 14
 
+#: how many full top->bottom passes one scan may take: the FIRST open of a run
+#: can still be hydrating (live 2026-10-07 dry run: the first scan mounted 40 of
+#: 60 rows), so the scan repeats until a pass stops adding rows. Indices stay
+#: valid across passes — the list order is stable and the reader always walks
+#: from the top (probe scripts/probe_share_rows.py).
+PICKER_SCAN_PASSES = 3
+
 
 async def _picker_rows(page: Page) -> list[dict]:
     """[{i, name, full}] of the picker rows currently rendered, in DOM order.
@@ -1498,15 +1505,9 @@ async def _picker_rows(page: Page) -> list[dict]:
     return out
 
 
-async def _picker_all_rows(page: Page, cfg: Config,
-                           log: log_fn = print) -> list[dict]:
-    """Every row of the picker list: back to the top, then step DOWN until the
-    scroll can no longer advance (progressive motion — the list's graphql pages
-    ride it, and the DOM keeps every row it rendered; probe 2026-10-07).
-
-    v1 always performs the full scan because `name_total` needs the count of
-    same-named rows and only a complete list has it. (Cheap optimisation for
-    later: stop at the first exact hit when the group's `name_total` is 1.)"""
+async def _scan_picker_once(page: Page, cfg: Config) -> list[dict]:
+    """One top->bottom walk of the picker list, returning the rows mounted at
+    the END of it."""
     try:
         await page.evaluate(_PICKER_TOP_JS)
     except Exception:
@@ -1519,9 +1520,31 @@ async def _picker_all_rows(page: Page, cfg: Config,
         except Exception:
             break
         await page.wait_for_timeout(SHARE_SETTLE_POLL_MS)
-    rows = await _picker_rows(page)
-    log(f"share: picker list scanned, {len(rows)} row(s) mounted")
-    return rows
+    return await _picker_rows(page)
+
+
+async def _picker_all_rows(page: Page, cfg: Config,
+                           log: log_fn = print) -> list[dict]:
+    """Every row of the picker list: back to the top, then step DOWN until the
+    scroll can no longer advance (progressive motion — the list's graphql pages
+    ride it, and the DOM keeps every row it rendered; probe 2026-10-07).
+
+    Repeats the walk while it keeps finding MORE rows (the first open of a run
+    can still be hydrating: 40 of 60 rows on the live dry run), and keeps the
+    largest set seen: an incomplete list would report a real target as missing
+    and hand the share to the typeahead fallback, which is exactly the path that
+    loses shares. v1 walks it fully because `name_total` needs the count of
+    same-named rows. (Cheap optimisation for later: stop at the first exact hit
+    when the group's `name_total` is 1.)"""
+    best: list[dict] = []
+    for pass_no in range(1, PICKER_SCAN_PASSES + 1):
+        rows = await _scan_picker_once(page, cfg)
+        if len(rows) > len(best):
+            best = rows
+        elif pass_no > 1:
+            break
+    log(f"share: picker list scanned, {len(best)} row(s) mounted")
+    return best
 
 
 def match_picker_row(rows: list, target: dict) -> dict:

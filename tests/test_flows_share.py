@@ -603,6 +603,23 @@ def test_match_picker_row_rank_out_of_range_is_shifted():
     assert got["status"] == "shifted"
 
 
+def test_picker_all_rows_rescans_until_the_count_stabilises(monkeypatch,
+                                                            tmp_path):
+    """The first open of a run can still be hydrating (live dry run: 40 of 60
+    rows on the first scan). A short list would report a real target as
+    'missing' and hand the share to the typeahead, which loses shares — so the
+    scan walks again while it keeps finding more rows and keeps the largest."""
+    _listen(monkeypatch, tmp_path)
+    short = [_row(i, f"g{i}") for i in range(40)]
+    full = [_row(i, f"g{i}") for i in range(60)]
+    page = FakePage(js={fl._PICKER_ROWS_JS: [short, full],
+                        fl._PICKER_TOP_JS: True,
+                        fl._SCROLL_PICKER_JS: False})
+    rows = asyncio.run(fl._picker_all_rows(page, _cfg(tmp_path),
+                                           lambda *_a: None))
+    assert len(rows) == 60 and rows[0]["name"] == "g0"
+
+
 # ---------------- A4: stage_or_publish_share ----------------
 
 
