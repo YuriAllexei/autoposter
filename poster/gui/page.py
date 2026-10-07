@@ -148,6 +148,9 @@ thead th.num { text-align:right; }
 tbody td { padding:8.5px 11px; border-bottom:1px solid rgba(148,163,184,.055);
   white-space:nowrap; }
 tbody td.name { white-space:normal; max-width:330px; }
+#listings td.desc { white-space:pre-wrap; max-width:26em; max-height:4.8em;
+  overflow:hidden; vertical-align:top; cursor:pointer; font-size:.92em; }
+#listings td.desc.open { max-height:none; }
 tbody tr:hover td { background:rgba(122,162,255,.055); }
 tbody tr:last-child td { border-bottom:none; }
 td.num { text-align:right; font-variant-numeric:tabular-nums; }
@@ -295,7 +298,8 @@ label[for=autoscroll] { font-size:12px; color:var(--ink2); }
     <h2>Marketplace listings</h2>
     <div class="tablewrap"><table id="listings">
       <thead><tr><th>id</th><th>title</th><th>price</th><th>approved</th>
-        <th>rejected</th><th class="num">batches</th><th class="num">groups</th><th>live?</th></tr></thead>
+        <th>rejected</th><th class="num">batches</th><th class="num">groups</th><th>live?</th>
+        <th>descripción</th><th>post</th></tr></thead>
       <tbody></tbody>
     </table></div>
     <div class="note" id="listingsnote"></div>
@@ -469,10 +473,29 @@ function renderState(st) {
     td(tr, row.crossposts, "num");
     td(tr, row.crosspost_groups + (row.crosspost_coverage === null ? "" : " (" + row.crosspost_coverage + "%)"), "num");
     deliveredCell(tr, row);
+    // the seller's own description (fetched by poster.listings); click toggles
+    // the full text, the collapsed cell clamps it to a few lines via CSS.
+    const dcell = td(tr, row.description || "—");
+    dcell.className = "desc";
+    dcell.title = "click to expand / collapse";
+    dcell.onclick = () => dcell.classList.toggle("open");
+    // one pair per row: the SAME sequential pipeline, narrowed to this listing
+    // (dry stages and closes the composer; LIVE needs .env + the typed phrase)
+    const pcell = td(tr, "", "num");
+    for (const wantLive of [false, true]) {
+      const b = document.createElement("button");
+      b.className = (wantLive ? "danger" : "ghost") + " post-btn";
+      b.textContent = wantLive ? "LIVE" : "dry";
+      b.dataset.live = wantLive ? "1" : "0";
+      b.onclick = () => rowRun(row.id, wantLive);
+      pcell.appendChild(b);
+    }
   }, l.available ? "listings snapshot is empty (confirmed 0 active listings)"
                  : "not fetched yet — no listings.json on disk");
   text($("listingsnote"),
-    l.available ? ("snapshot " + fmtTs(l.fetched_at) + " · " + l.count + " active listings")
+    l.available ? ("snapshot " + fmtTs(l.fetched_at) + " · " + l.count +
+                   " active listings · click a description to expand · " +
+                   "post = sequential group sharing for that listing only")
                 : "not fetched yet — press Refresh listings to fetch it");
 
   // share audit card: read-only per-listing share coverage from the ledger
@@ -558,6 +581,16 @@ function renderButtons(st) {
     $("b-live-cross").title = "AP_DRY_RUN=true in .env — edit it to arm live runs";
     $("b-live-share").title = "AP_DRY_RUN=true in .env — edit it to arm live runs";
   }
+  // per-row post buttons (built by the listings table earlier this render):
+  // same gates as the global share buttons — never while a run owns the
+  // browser, never when poster.share is absent, LIVE never while .env says dry.
+  document.querySelectorAll("#listings tbody .post-btn").forEach((b) => {
+    const wantLive = b.dataset.live === "1";
+    b.disabled = busy || avail["share-one"] === false || (wantLive && envDry);
+    b.title = avail["share-one"] === false ? "poster.share is not on this checkout"
+            : wantLive && envDry ? "AP_DRY_RUN=true in .env — edit it to arm live runs"
+            : busy ? "a run is already in progress" : "";
+  });
 }
 
 async function post(url, body) {
@@ -589,6 +622,19 @@ function run(mode, live) {
   post("/api/run", payload)
     .then((d) => { note("started " + mode + (live ? " LIVE" : " (dry)") +
                         " · pid " + d.pid); poll(); })
+    .catch((e) => note("refused: " + e.message));
+}
+
+function rowRun(listingId, live) {
+  // Same endpoint and the same double gate as the global share buttons, but
+  // narrowed to ONE listing (poster.share --listing <id>). The server refuses
+  // any id that is not a plain digit run; LIVE still needs the typed phrase
+  // and .env AP_DRY_RUN=false.
+  const payload = { mode: "share-one", live: !!live, listing: String(listingId) };
+  if (live) payload.confirm = $("confirm").value;
+  post("/api/run", payload)
+    .then((d) => { note("started listing " + listingId +
+                        (live ? " LIVE" : " (dry)") + " · pid " + d.pid); poll(); })
     .catch((e) => note("refused: " + e.message));
 }
 

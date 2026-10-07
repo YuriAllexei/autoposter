@@ -785,6 +785,23 @@ def test_page_is_self_contained():
     assert "/api/log?since=" in html.replace(" ", "")
 
 
+def test_page_has_inventory_columns_and_per_listing_post():
+    """The listings card shows the seller description (click to expand) and a
+    dry/LIVE pair per row that posts THAT listing to the groups."""
+    html = render_page()
+    assert "<th>descripción</th>" in html and "<th>post</th>" in html
+    assert "rowRun" in html and 'mode: "share-one"' in html
+    assert 'dcell.className = "desc"' in html
+    assert "#listings td.desc.open" in html          # the expand-on-click CSS
+
+
+def test_page_row_post_buttons_are_gated_like_the_global_ones():
+    html = render_page()
+    assert "#listings tbody .post-btn" in html       # busy / availability sweep
+    assert 'avail["share-one"] === false' in html
+    assert "poster.share is not on this checkout" in html
+
+
 def test_server_refuses_to_bind_beyond_loopback(tmp_path):
     with pytest.raises(ValueError):
         create_server(GuiPaths.from_root(tmp_path),
