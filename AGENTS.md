@@ -178,6 +178,25 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
    Do NOT make run_listing read ledger/coverage across runs — the user
    rejected that design; ledger lines exist for the Discord summary and
    audit only.
+10. GROUPS MATRIX (user spec 2026-10-07): a marketplace listing can switch
+    individual JOINED groups OFF. The store is
+    `<capture_root>/config/group_matrix.json` = per listing id the set of
+    FOLDED group names that are OFF — never the set that is on — so a new
+    group, a new listing, a missing file or a corrupt file all mean
+    ENABLED and a bug here can only cost a missed share, never an unintended
+    post. Owner: `poster/groups_matrix.py` (pure stdlib; `fold_name` is
+    `poster.flows._norm` — parity-pinned by test, because the dashboard WRITES
+    those keys and the pipeline MATCHES group names with them; atomic
+    tmp+replace write). Consumers: `poster.share.run_listing` filters its plan
+    (`filter_plan`) right after `filter_groups` and logs the drop count, and
+    `--list` shows the same filtered plan; `poster.gui.state` renders the
+    checkbox rows server-side (`matrix_rows_for`) so the page never folds names
+    in JS, `POST /api/group-matrix` saves. The checkbox universe is the
+    joined-groups snapshot (`poster.main --list-groups`), so Refresh groups
+    propagates straight into every listing's matrix. SCOPE IS THE PER-ITEM POST
+    PATH ONLY: crosspost and the text pipeline ignore the matrix (user
+    decision 2026-10-07). Hand-editing the file is legal but keys must stay
+    folded.
 
 ## Protocol facts (ground truth from recordings; verify against them before
 ## "fixing" selectors)
@@ -281,6 +300,16 @@ Submodule gotchas: see `scraping_recorder/AGENTS.md`.
   targets. The dialog is READY when the search box + its rows exist — waiting
   for the graphql answer instead cost 4 hub opens in the 2026-10-07 live run
   (a click landing mid-transition can leave no dialog at all).
+
+- GROUPS MATRIX (user 2026-10-07): two joined groups may share a name — the
+  matrix collapses same-folded-name groups into ONE checkbox (labelled
+  "(N groups)") and toggling it switches all of them, because name is the only
+  identity the picker offers; `poster.share` still addresses the twins as
+  separate ROWS (rank + `name_total`). The matrix can only SUBTRACT: a group
+  left ON but missing from a listing's share picker still cannot be shared to —
+  FB decides what the picker offers, and the run log is the truth.
+- The matrix store lives under `.local-capture/` (gitignored), so it is per
+  machine and per account: a fresh clone starts with everything ON.
 
 ## Adding groups
 

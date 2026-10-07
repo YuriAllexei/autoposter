@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .. import groups_matrix
 from . import content as content_mod
 from . import state as state_mod
 from .content import ContentError
@@ -153,6 +154,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/refresh-listings":
             self._spawn("listings-refresh", live=False)
             return
+        if path == "/api/group-matrix":
+            self._group_matrix(payload)
+            return
         if path.startswith("/api/content"):
             self._content(path, payload)
             return
@@ -196,6 +200,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             HTTPStatus.BAD_REQUEST)
             return
         self._send_json(out)
+
+    def _group_matrix(self, payload: dict[str, Any]) -> None:
+        """Switch groups OFF for ONE listing (the dashboard's groups matrix).
+
+        `disabled` REPLACES that listing's set, so every toggle is idempotent —
+        the modal resends the whole set on each click and a retry cannot
+        accumulate. Success returns the fresh full state: the page then needs no
+        second round-trip and the button label (ON/TOTAL) is right on the next
+        paint. Bad input is the operator's mistake, not a server fault:
+        400 + the reason, exactly like the /api/content handlers."""
+        root = self.dashboard.paths.capture_root
+        try:
+            groups_matrix.save_matrix(root, payload.get("listing_id"),
+                                      payload.get("disabled"))
+        except groups_matrix.MatrixError as exc:
+            self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json(self.dashboard.build_state())
 
     def _run(self, payload: dict[str, Any]) -> None:
         mode = str(payload.get("mode") or "")
