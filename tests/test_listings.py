@@ -371,3 +371,9 @@ def test_attach_keeps_every_row_when_one_description_fails(tmp_path, monkeypatch
     assert any("unavailable" in m for m in msgs)
     saved = json.loads(snapshot_path(cfg).read_text(encoding="utf-8"))
     assert len(saved) == 2
+
+
+def test_cli_no_descriptions_flag_defaults_off():
+    from poster.listings import _cli
+    assert _cli([]).no_descriptions is False
+    assert _cli(["--no-descriptions"]).no_descriptions is True

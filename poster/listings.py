@@ -542,10 +542,26 @@ async def fetch_active_listings(page: Page, cfg: Config,
 # ---------------------------------------------------------------------------
 #: CLI: `poetry run python -m poster.listings` — READ-ONLY: adopt identity,
 #: fetch the ACTIVE listings, print a table, refresh the snapshot the
-#: dashboard's listings tile reads. Opens no dialogs, clicks nothing.
+#: dashboard's listings tile reads. By default it ALSO visits each item page
+#: to stamp the listing's own description (--no-descriptions skips that).
+#: Opens no dialogs, clicks nothing, never publishes.
 #: rc: 0 ok (a confirmed 0 listings is ok) · 1 fetch failed · 2 not logged
 #: in · 3 identity switch failed.
 # ---------------------------------------------------------------------------
+
+
+def _cli(argv: list[str] | None = None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        prog="python -m poster.listings",
+        description="Fetch ACTIVE marketplace listings of the posting "
+                    "identity and refresh the dashboard snapshot "
+                    "(read-only; nothing is published or clicked).")
+    ap.add_argument("--no-descriptions", action="store_true",
+                    help="skip the per-item description fetch "
+                         "(id/title/price only — faster refresh)")
+    ap.add_argument("--env-file", default=None,
+                    help="alternate .env path (or set AP_ENV_FILE)")
+    return ap.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -554,14 +570,7 @@ def main(argv: list[str] | None = None) -> int:
     from .config import load_config
     from .fb import adopt_identity, launch, make_log
 
-    ap = argparse.ArgumentParser(
-        prog="python -m poster.listings",
-        description="Fetch ACTIVE marketplace listings of the posting "
-                    "identity and refresh the dashboard snapshot "
-                    "(read-only; nothing is published or clicked).")
-    ap.add_argument("--env-file", default=None,
-                    help="alternate .env path (or set AP_ENV_FILE)")
-    args = ap.parse_args(argv)
+    args = _cli(argv)
 
     cfg = load_config(env_file=args.env_file)
     log = make_log()
@@ -582,12 +591,16 @@ def main(argv: list[str] | None = None) -> int:
                 except ListingsFetchError as e:
                     log(f"abort: listings fetch failed: {e}")
                     return 1
+                if not args.no_descriptions:
+                    listings = await attach_descriptions(page, cfg, listings,
+                                                         log=log)
                 log(f"ACTIVE LISTINGS for {cfg.identity_label!r} "
                     f"({cfg.post_as}):")
                 for lst in listings:
+                    desc = " ".join(str(lst.get("description") or "").split())
                     log(f"  {lst.get('id') or '?':>20}  "
-                        f"{str(lst.get('title') or '')[:48]:<48} "
-                        f"{lst.get('price') or ''}")
+                        f"{str(lst.get('title') or '')[:40]:<40} "
+                        f"{lst.get('price') or '':>10}  {desc[:44]}")
                 if not listings:
                     log("  (confirmed 0 active listings)")
                 return 0
