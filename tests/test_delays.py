@@ -6,7 +6,12 @@ below pins that it still bites.
 """
 from pathlib import Path
 
-from poster.config import MAX_ALLOWED_DELAY, Config, load_config
+from poster.config import (
+    MAX_ALLOWED_DELAY,
+    MAX_ALLOWED_GROUP_SWITCH,
+    Config,
+    load_config,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -47,8 +52,9 @@ def test_direct_construction_is_capped_too():
     cfg = Config(delay_min=45.0, delay_max=180.0)
     assert cfg.delay_max == MAX_ALLOWED_DELAY
     assert cfg.delay_min < cfg.delay_max
-    gs = Config(group_switch_min=30.0, group_switch_max=90.0)
-    assert gs.group_switch_max <= 20.0
+    gs = Config(group_switch_min=30.0, group_switch_max=900.0)
+    assert gs.group_switch_max == MAX_ALLOWED_GROUP_SWITCH
+    assert gs.group_switch_min <= gs.group_switch_max
 
 
 def test_direct_construction_rejects_bad_post_as():
@@ -70,15 +76,26 @@ def test_group_switch_defaults_are_10_15(tmp_path, monkeypatch):
     assert (cfg.group_switch_min, cfg.group_switch_max) == (10.0, 15.0)
 
 
-def test_group_switch_own_ceiling_is_20s(tmp_path, monkeypatch):
-    # group switch is exempt from MAX_ALLOWED_DELAY (it is 10-15 BY DESIGN)
-    # but capped by its own 20s ceiling so a .env typo can't idle for minutes
+def test_group_switch_own_ceiling_is_35s(tmp_path, monkeypatch):
+    # group switch is exempt from MAX_ALLOWED_DELAY (it is its own category)
+    # but capped by its own ceiling so a .env typo can't idle for minutes.
+    # Ceiling = user spec max (30s) + 5s, mirroring the old 15s/20s pair.
     env = tmp_path / ".env"
     env.write_text("AP_GROUP_SWITCH_MIN_SECONDS=10\n"
                    "AP_GROUP_SWITCH_MAX_SECONDS=900\n")
     cfg = load_config(env_file=env)
-    assert cfg.group_switch_max == 20.0
+    assert cfg.group_switch_max == 35.0
     assert cfg.group_switch_min <= cfg.group_switch_max
+
+
+def test_group_switch_operating_range_20_30_survives(tmp_path):
+    """User spec 2026-10-06: 20-30s between group postings. The ceiling must
+    not clip the configured range (it used to fold 20-30 into 20-20)."""
+    env = tmp_path / ".env"
+    env.write_text("AP_GROUP_SWITCH_MIN_SECONDS=20\n"
+                   "AP_GROUP_SWITCH_MAX_SECONDS=30\n")
+    cfg = load_config(env_file=env)
+    assert (cfg.group_switch_min, cfg.group_switch_max) == (20.0, 30.0)
 
 
 def test_group_switch_invalid_range_raises(tmp_path, monkeypatch):

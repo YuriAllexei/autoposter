@@ -53,16 +53,26 @@ def test_shipped_env_example_share_gap_is_10_15():
     assert (cfg.share_gap_min, cfg.share_gap_max) == (10.0, 15.0)
 
 
-def test_share_gap_capped_at_20s_and_validated(tmp_path):
+def test_share_gap_capped_at_35s_and_validated(tmp_path):
     env = tmp_path / ".env"
     env.write_text("AP_SHARE_GAP_MIN_SECONDS=15\n"
                    "AP_SHARE_GAP_MAX_SECONDS=900\n", encoding="utf-8")
     cfg = load_config(env_file=env)
-    assert MAX_ALLOWED_SHARE_GAP == 20.0
+    assert MAX_ALLOWED_SHARE_GAP == 35.0
     assert cfg.share_gap_max == MAX_ALLOWED_SHARE_GAP
     assert cfg.share_gap_min == 15.0
     with pytest.raises(ValueError, match="share-gap"):
         Config(share_gap_min=50.0, share_gap_max=10.0)
+
+
+def test_share_gap_operating_range_20_30_survives(tmp_path):
+    """User spec 2026-10-06: 20-30s between shares. The ceiling must not clip
+    the configured range (it used to fold 20-30 into 20-20)."""
+    env = tmp_path / ".env"
+    env.write_text("AP_SHARE_GAP_MIN_SECONDS=20\n"
+                   "AP_SHARE_GAP_MAX_SECONDS=30\n", encoding="utf-8")
+    cfg = load_config(env_file=env)
+    assert (cfg.share_gap_min, cfg.share_gap_max) == (20.0, 30.0)
 
 
 def test_share_gap_garbage_falls_back_to_defaults(tmp_path):

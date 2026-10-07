@@ -18,20 +18,21 @@ _TRUTHY = {"1", "true", "yes", "on"}
 # may wait longer than this cap, even if .env asks for more.
 MAX_ALLOWED_DELAY = 7.0
 
-# Exception to the rule above (also user-specified 2026-09-22): the
-# group-to-group switch sleep is 10-15s by design. This is its own safety
-# ceiling so a typo in .env can never park the bot for minutes.
-MAX_ALLOWED_GROUP_SWITCH = 20.0
+# Exception to the rule above: the group-to-group switch sleep is its own
+# category BY DESIGN (user spec 2026-09-22: 10-15s; raised 2026-10-06 to
+# 20-30s). This is its own safety ceiling so a typo in .env can never park the
+# bot for minutes — spec max + 5s, mirroring the original 15s/20s pair.
+MAX_ALLOWED_GROUP_SWITCH = 35.0
 #: crosspost batch/listing gap is its own category (user spec 2026-09-23:
 #: ~2 min between batches of one listing AND between listings); capped.
 MAX_ALLOWED_CROSSPOST_GAP = 300.0
 
-#: share-to-share gap is its own category (user spec 2026-09-24: 2-3s between
-#: one share and the next — group to group AND listing to listing); own
-#: ceiling so a .env typo can never park the share pipeline for minutes. The
-#: general MAX_ALLOWED_DELAY (7s) deliberately does NOT apply here, exactly
-#: like the crosspost gap above.
-MAX_ALLOWED_SHARE_GAP = 20.0
+#: share-to-share gap is its own category (user spec 2026-09-24, retuned
+#: 2026-10-06 to 20-30s between one share and the next — group to group AND
+#: listing to listing); own ceiling so a .env typo can never park the share
+#: pipeline for minutes (spec max + 5s). The general MAX_ALLOWED_DELAY (7s)
+#: deliberately does NOT apply here, exactly like the crosspost gap above.
+MAX_ALLOWED_SHARE_GAP = 35.0
 
 
 def _as_bool(v: str | None, default: bool) -> bool:
@@ -108,8 +109,9 @@ class Config:
     delay_min: float = 45.0
     delay_max: float = 180.0
     # Explicit user rule (2026-09-22): the wait BETWEEN finishing one group and
-    # opening the next is uniform 10-15s (separate category from the general
-    # 2-4s action sleeps; still safety-capped, see MAX_ALLOWED_GROUP_SWITCH).
+    # opening the next is its own uniform range, separate from the 2-4s action
+    # sleeps (shipped default 10-15s; user's 2026-10-06 spec: 20-30s —
+    # knob-driven, safety ceiling MAX_ALLOWED_GROUP_SWITCH).
     group_switch_min: float = 10.0
     group_switch_max: float = 15.0
     type_delay_min_ms: int = 30
@@ -131,10 +133,10 @@ class Config:
 
     # ---- individual SHARE pipeline (poster/share.py) ----
     # Wait BETWEEN consecutive group-shares (group to group AND listing to
-    # listing) is its own category. History: first spec 2-3s (2026-09-24),
-    # raised by the user to uniform 10-15s (2026-09-25) — one share per
-    # group is a full composer publish, so it deserves the group-change
-    # pacing. Capped at MAX_ALLOWED_SHARE_GAP (20s) like every other wait.
+    # listing) is its own category. History: 2-3s (2026-09-24) -> uniform
+    # 10-15s (2026-09-25) -> 20-30s (2026-10-06). One share per group is a
+    # full composer publish, so it deserves the group-change pacing. Safety
+    # ceiling MAX_ALLOWED_SHARE_GAP like every other wait.
     share_gap_min: float = 10.0
     share_gap_max: float = 15.0
 

@@ -172,8 +172,9 @@ async def run_listing(page, cfg: Config, recorder: RunRecorder, listing: dict,
     exactly the robotic fingerprint we avoid.
 
     Sleeps: ACTION category before each share; SHARE-GAP category
-    (AP_SHARE_GAP_*, 10-15s) BETWEEN consecutive shares, never after the
-    run's last one (is_last_listing marks it).
+    (AP_SHARE_GAP_*, default 10-15s, user's 2026-10-06 spec 20-30s) BETWEEN
+    consecutive shares, never after the run's last one (is_last_listing marks
+    it).
 
     A FlowError fails THIS share only; every attempt marks its
     (listing_id, group_id) pair done for this run.

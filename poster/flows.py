@@ -92,7 +92,8 @@ async def human_sleep(cfg: Config, log: log_fn, why: str = "",
                       lo: float | None = None, hi: float | None = None
                       ) -> None:
     """[rule 5] uniform(min,max) seconds before any sensitive action.
-    lo/hi override the general range (used for the 10-15s group switch)."""
+    lo/hi override the general range (used for the group-switch /
+    share-gap categories, i.e. AP_GROUP_SWITCH_* and AP_SHARE_GAP_*)."""
     s = random.uniform(cfg.delay_min if lo is None else lo,
                        cfg.delay_max if hi is None else hi)
     log(f"sleep {s:.1f}s before {why or 'action'}")

@@ -325,8 +325,9 @@ async def main_async(cfg: Config, only_group: str | None) -> int:
                 else:  # unknown status = programmer error, say so LOUD
                     raise RuntimeError(f"run_group returned unknown status {status!r}")
                 if idx + 1 < len(planned):
-                    # USER RULE (2026-09-22): group change = uniform
-                    # 10-15s after finishing one group, before opening the
+                    # USER RULE (2026-09-22, retuned 2026-10-06): group change =
+                    # uniform AP_GROUP_SWITCH_* (default 10-15s, user's spec
+                    # 20-30s) after finishing one group, before opening the
                     # next. General action sleeps stay 2-4s.
                     await human_sleep(cfg, log, "change to next group",
                                       cfg.group_switch_min, cfg.group_switch_max)
